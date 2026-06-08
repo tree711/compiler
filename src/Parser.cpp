@@ -25,8 +25,7 @@ private:
         while (currentToken.type != TokenType::END_OF_FILE &&
                currentToken.type != TokenType::SEMICOLON &&
                currentToken.type != TokenType::RBRACE &&
-               currentToken.type != TokenType::ELSE &&
-               currentToken.type != TokenType::FI) {
+               currentToken.type != TokenType::ELSE) {
             currentToken = lexer.getNextToken();
         }
         if (currentToken.type == TokenType::SEMICOLON) {
@@ -36,12 +35,9 @@ private:
 
     ASTNodePtr parseProgram();
     ASTNodePtr parseDeclaration();
-    ASTNodePtr parseFunctionDefinition(const std::string& name, const std::string& returnType);
     ASTNodePtr parseStatement();
     ASTNodePtr parseExpression();
     ASTNodePtr parseAssignment();
-    ASTNodePtr parseLogicalOr();
-    ASTNodePtr parseLogicalAnd();
     ASTNodePtr parseEquality();
     ASTNodePtr parseRelational();
     ASTNodePtr parseAdditive();
@@ -49,10 +45,11 @@ private:
     ASTNodePtr parseUnary();
     ASTNodePtr parsePrimary();
     ASTNodePtr parseBlock();
-    std::string parseType();
+    ASTNodePtr parseIfStatement();
+    ASTNodePtr parseWhileStatement();
 
 public:
-    Parser(Lexer& l) : lexer(l) {
+    Parser(Lexer& l) : lexer(l), currentToken(TokenType::END_OF_FILE, "", 0, 0) {
         currentToken = lexer.getNextToken();
     }
 
@@ -66,35 +63,10 @@ ASTNodePtr Parser::parseProgram() {
     
     while (currentToken.type != TokenType::END_OF_FILE) {
         try {
-            if (currentToken.type == TokenType::INT || 
-                currentToken.type == TokenType::FLOAT_TYPE || 
-                currentToken.type == TokenType::VOID) {
-                std::string type = currentToken.value;
-                eat(currentToken.type);
-                
-                if (currentToken.type == TokenType::IDENTIFIER) {
-                    std::string name = currentToken.value;
-                    eat(TokenType::IDENTIFIER);
-                    
-                    if (currentToken.type == TokenType::LPAREN) {
-                        program->functions.push_back(parseFunctionDefinition(name, type));
-                    } else {
-                        program->declarations.push_back(std::make_unique<DeclarationNode>(
-                            type, name, nullptr, currentToken.line, currentToken.column));
-                        if (currentToken.type == TokenType::ASSIGN) {
-                            eat(TokenType::ASSIGN);
-                            auto init = parseExpression();
-                            static_cast<DeclarationNode*>(program->declarations.back().get())->initializer = std::move(init);
-                        }
-                        if (currentToken.type == TokenType::SEMICOLON) {
-                            eat(TokenType::SEMICOLON);
-                        }
-                    }
-                } else {
-                    throw std::runtime_error("Expected identifier after type");
-                }
+            if (currentToken.type == TokenType::INT) {
+                program->addDeclaration(parseDeclaration());
             } else {
-                program->declarations.push_back(parseDeclaration());
+                program->addStatement(parseStatement());
             }
         } catch (const std::runtime_error& e) {
             synchronize();
@@ -105,7 +77,8 @@ ASTNodePtr Parser::parseProgram() {
 }
 
 ASTNodePtr Parser::parseDeclaration() {
-    std::string type = parseType();
+    eat(TokenType::INT);
+    
     std::string name = currentToken.value;
     eat(TokenType::IDENTIFIER);
     
@@ -121,55 +94,8 @@ ASTNodePtr Parser::parseDeclaration() {
         throw std::runtime_error("Missing semicolon in declaration");
     }
     
-    return std::make_unique<DeclarationNode>(type, name, std::move(initializer), 
+    return std::make_unique<DeclarationNode>("int", name, std::move(initializer), 
                                              currentToken.line, currentToken.column);
-}
-
-std::string Parser::parseType() {
-    if (currentToken.type == TokenType::INT) {
-        eat(TokenType::INT);
-        return "int";
-    } else if (currentToken.type == TokenType::FLOAT_TYPE) {
-        eat(TokenType::FLOAT_TYPE);
-        return "float";
-    } else if (currentToken.type == TokenType::VOID) {
-        eat(TokenType::VOID);
-        return "void";
-    } else {
-        throw std::runtime_error("Expected type");
-    }
-}
-
-ASTNodePtr Parser::parseFunctionDefinition(const std::string& name, const std::string& returnType) {
-    eat(TokenType::LPAREN);
-    
-    std::vector<std::pair<std::string, std::string>> parameters;
-    if (currentToken.type != TokenType::RPAREN) {
-        while (true) {
-            std::string paramType = parseType();
-            std::string paramName = currentToken.value;
-            eat(TokenType::IDENTIFIER);
-            parameters.emplace_back(paramName, paramType);
-            
-            if (currentToken.type == TokenType::COMMA) {
-                eat(TokenType::COMMA);
-            } else {
-                break;
-            }
-        }
-    }
-    eat(TokenType::RPAREN);
-    
-    ASTNodePtr body = parseBlock();
-    
-    return std::make_unique<FunctionDefinitionNode>(
-        name, 
-        returnType, 
-        parameters, 
-        std::move(body), 
-        currentToken.line, 
-        currentToken.column
-    );
 }
 
 ASTNodePtr Parser::parseBlock() {
@@ -180,7 +106,11 @@ ASTNodePtr Parser::parseBlock() {
     while (currentToken.type != TokenType::RBRACE && 
            currentToken.type != TokenType::END_OF_FILE) {
         try {
-            block->statements.push_back(parseStatement());
+            if (currentToken.type == TokenType::INT) {
+                block->addStatement(parseDeclaration());
+            } else {
+                block->addStatement(parseStatement());
+            }
         } catch (const std::runtime_error& e) {
             synchronize();
         }
@@ -201,10 +131,6 @@ ASTNodePtr Parser::parseStatement() {
             return parseIfStatement();
         case TokenType::WHILE:
             return parseWhileStatement();
-        case TokenType::FOR:
-            return parseForStatement();
-        case TokenType::RETURN:
-            return parseReturnStatement();
         case TokenType::LBRACE:
             return parseBlock();
         case TokenType::IDENTIFIER: {
@@ -218,32 +144,9 @@ ASTNodePtr Parser::parseStatement() {
                 }
                 return std::make_unique<AssignmentNode>(name, std::move(value), 
                                                        currentToken.line, currentToken.column);
-            } else if (currentToken.type == TokenType::LPAREN) {
-                eat(TokenType::LPAREN);
-                std::vector<ASTNodePtr> args;
-                if (currentToken.type != TokenType::RPAREN) {
-                    while (true) {
-                        args.push_back(parseExpression());
-                        if (currentToken.type == TokenType::COMMA) {
-                            eat(TokenType::COMMA);
-                        } else {
-                            break;
-                        }
-                    }
-                }
-                eat(TokenType::RPAREN);
-                if (currentToken.type == TokenType::SEMICOLON) {
-                    eat(TokenType::SEMICOLON);
-                }
-                return std::make_unique<IdentifierNode>(name, currentToken.line, currentToken.column);
             } else {
                 throw std::runtime_error("Unexpected token after identifier");
             }
-        }
-        case TokenType::INT:
-        case TokenType::FLOAT_TYPE:
-        case TokenType::VOID: {
-            return parseDeclaration();
         }
         case TokenType::SEMICOLON: {
             eat(TokenType::SEMICOLON);
@@ -294,61 +197,12 @@ ASTNodePtr Parser::parseWhileStatement() {
                                                 currentToken.column);
 }
 
-ASTNodePtr Parser::parseForStatement() {
-    eat(TokenType::FOR);
-    eat(TokenType::LPAREN);
-    
-    ASTNodePtr init = nullptr;
-    if (currentToken.type != TokenType::SEMICOLON) {
-        init = parseStatement();
-    }
-    eat(TokenType::SEMICOLON);
-    
-    ASTNodePtr condition = nullptr;
-    if (currentToken.type != TokenType::SEMICOLON) {
-        condition = parseExpression();
-    }
-    eat(TokenType::SEMICOLON);
-    
-    ASTNodePtr increment = nullptr;
-    if (currentToken.type != TokenType::RPAREN) {
-        increment = parseExpression();
-    }
-    eat(TokenType::RPAREN);
-    
-    auto body = parseStatement();
-    
-    return std::make_unique<ForStatementNode>(std::move(init), 
-                                              std::move(condition), 
-                                              std::move(increment), 
-                                              std::move(body),
-                                              currentToken.line, 
-                                              currentToken.column);
-}
-
-ASTNodePtr Parser::parseReturnStatement() {
-    eat(TokenType::RETURN);
-    
-    ASTNodePtr value = nullptr;
-    if (currentToken.type != TokenType::SEMICOLON) {
-        value = parseExpression();
-    }
-    
-    if (currentToken.type == TokenType::SEMICOLON) {
-        eat(TokenType::SEMICOLON);
-    }
-    
-    return std::make_unique<ReturnStatementNode>(std::move(value), 
-                                                 currentToken.line, 
-                                                 currentToken.column);
-}
-
 ASTNodePtr Parser::parseExpression() {
     return parseAssignment();
 }
 
 ASTNodePtr Parser::parseAssignment() {
-    auto left = parseLogicalOr();
+    auto left = parseEquality();
     
     if (currentToken.type == TokenType::ASSIGN) {
         eat(TokenType::ASSIGN);
@@ -364,40 +218,12 @@ ASTNodePtr Parser::parseAssignment() {
     return left;
 }
 
-ASTNodePtr Parser::parseLogicalOr() {
-    auto left = parseLogicalAnd();
-    
-    while (currentToken.type == TokenType::IDENTIFIER && currentToken.value == "||") {
-        std::string op = currentToken.value;
-        eat(TokenType::IDENTIFIER);
-        auto right = parseLogicalAnd();
-        left = std::make_unique<BinaryOpNode>(op, std::move(left), std::move(right), 
-                                              currentToken.line, currentToken.column);
-    }
-    
-    return left;
-}
-
-ASTNodePtr Parser::parseLogicalAnd() {
-    auto left = parseEquality();
-    
-    while (currentToken.type == TokenType::IDENTIFIER && currentToken.value == "&&") {
-        std::string op = currentToken.value;
-        eat(TokenType::IDENTIFIER);
-        auto right = parseEquality();
-        left = std::make_unique<BinaryOpNode>(op, std::move(left), std::move(right), 
-                                              currentToken.line, currentToken.column);
-    }
-    
-    return left;
-}
-
 ASTNodePtr Parser::parseEquality() {
     auto left = parseRelational();
     
-    while (currentToken.type == TokenType::EQUAL || currentToken.type == TokenType::NOT_EQUAL) {
-        std::string op = currentToken.value;
-        eat(currentToken.type);
+    while (currentToken.type == TokenType::EQUAL) {
+        std::string op = "==";
+        eat(TokenType::EQUAL);
         auto right = parseRelational();
         left = std::make_unique<BinaryOpNode>(op, std::move(left), std::move(right), 
                                               currentToken.line, currentToken.column);
@@ -409,9 +235,8 @@ ASTNodePtr Parser::parseEquality() {
 ASTNodePtr Parser::parseRelational() {
     auto left = parseAdditive();
     
-    while (currentToken.type == TokenType::LESS || currentToken.type == TokenType::GREATER ||
-           currentToken.type == TokenType::LESS_EQUAL || currentToken.type == TokenType::GREATER_EQUAL) {
-        std::string op = currentToken.value;
+    while (currentToken.type == TokenType::LESS || currentToken.type == TokenType::GREATER) {
+        std::string op = (currentToken.type == TokenType::LESS) ? "<" : ">";
         eat(currentToken.type);
         auto right = parseAdditive();
         left = std::make_unique<BinaryOpNode>(op, std::move(left), std::move(right), 
@@ -425,7 +250,7 @@ ASTNodePtr Parser::parseAdditive() {
     auto left = parseMultiplicative();
     
     while (currentToken.type == TokenType::PLUS || currentToken.type == TokenType::MINUS) {
-        std::string op = currentToken.value;
+        std::string op = (currentToken.type == TokenType::PLUS) ? "+" : "-";
         eat(currentToken.type);
         auto right = parseMultiplicative();
         left = std::make_unique<BinaryOpNode>(op, std::move(left), std::move(right), 
@@ -439,7 +264,7 @@ ASTNodePtr Parser::parseMultiplicative() {
     auto left = parseUnary();
     
     while (currentToken.type == TokenType::MULTIPLY || currentToken.type == TokenType::DIVIDE) {
-        std::string op = currentToken.value;
+        std::string op = (currentToken.type == TokenType::MULTIPLY) ? "*" : "/";
         eat(currentToken.type);
         auto right = parseUnary();
         left = std::make_unique<BinaryOpNode>(op, std::move(left), std::move(right), 
@@ -451,7 +276,7 @@ ASTNodePtr Parser::parseMultiplicative() {
 
 ASTNodePtr Parser::parseUnary() {
     if (currentToken.type == TokenType::MINUS) {
-        std::string op = currentToken.value;
+        std::string op = "-";
         eat(TokenType::MINUS);
         auto operand = parseUnary();
         return std::make_unique<UnaryOpNode>(op, std::move(operand), 
@@ -467,12 +292,6 @@ ASTNodePtr Parser::parsePrimary() {
         int line = currentToken.line;
         int col = currentToken.column;
         eat(TokenType::INTEGER);
-        return std::make_unique<NumberNode>(val, line, col);
-    } else if (currentToken.type == TokenType::FLOAT) {
-        double val = std::stod(currentToken.value);
-        int line = currentToken.line;
-        int col = currentToken.column;
-        eat(TokenType::FLOAT);
         return std::make_unique<NumberNode>(val, line, col);
     } else if (currentToken.type == TokenType::IDENTIFIER) {
         std::string name = currentToken.value;
