@@ -1,58 +1,99 @@
-#include "../include/IR.h"
-#include <fstream>
+#include "../include/CodeGenerator.h"
 #include <sstream>
+#include <cctype>
 
-class CodeGenerator {
-private:
-    std::ofstream output;
-    std::unordered_map<std::string, int> variableOffsets;
-    int stackOffset;
+static bool isTemp(const std::string& value) {
+    return !value.empty() && value[0] == '%';
+}
 
-    void generateFunction(FunctionIR& func);
-    void generateBasicBlock(BasicBlock& block);
-    std::string getOperand(const std::string& op);
+static int alignTo16(int value) {
+    return (value + 15) / 16 * 16;
+}
 
-public:
-    CodeGenerator(const std::string& filename) : stackOffset(0) {
-        output.open(filename);
-        if (!output.is_open()) {
-            throw std::runtime_error("Cannot open output file: " + filename);
+static bool isIntegerLiteral(const std::string& value) {
+    if (value.empty()) return false;
+    size_t start = value[0] == '-' ? 1 : 0;
+    if (start == value.size()) return false;
+    for (size_t i = start; i < value.size(); ++i) {
+        if (!std::isdigit(static_cast<unsigned char>(value[i]))) {
+            return false;
         }
     }
+    return true;
+}
 
-    ~CodeGenerator() {
-        if (output.is_open()) {
-            output.close();
+static std::string asmOperand(const std::string& value) {
+    return isIntegerLiteral(value) ? "$" + value : value;
+}
+
+static void assignTempOffsets(FunctionIR& func,
+                              std::unordered_map<std::string, int>& variableOffsets,
+                              int& stackOffset) {
+    stackOffset = 0;
+    for (auto& block : func.blocks) {
+        for (auto& instr : block->instructions) {
+            if (isTemp(instr->result) && variableOffsets.find(instr->result) == variableOffsets.end()) {
+                stackOffset -= 4;
+                variableOffsets[instr->result] = stackOffset;
+            }
         }
     }
+}
 
-    void generate(IRProgram& program) {
-        output << ".data\n";
-        for (const std::string& global : program.globalVariables) {
-            output << "\t" << global << ":\t.long 0\n";
-        }
-        output << "\n.text\n";
-
-        for (auto& func : program.functions) {
-            generateFunction(*func);
-        }
+static void storeTemp(std::ofstream& output,
+                      const std::unordered_map<std::string, int>& variableOffsets,
+                      const std::string& result) {
+    auto it = variableOffsets.find(result);
+    if (it != variableOffsets.end()) {
+        output << "\tmovl %eax, " << it->second << "(%rbp)\n";
     }
-};
+}
+
+CodeGenerator::CodeGenerator(const std::string& filename) : stackOffset(0) {
+    output.open(filename);
+    if (!output.is_open()) {
+        throw std::runtime_error("Cannot open output file: " + filename);
+    }
+}
+
+CodeGenerator::~CodeGenerator() {
+    if (output.is_open()) {
+        output.close();
+    }
+}
+
+void CodeGenerator::generate(IRProgram& program) {
+    output << ".data\n";
+    for (const std::string& global : program.globalVariables) {
+        output << "\t" << global << ":\t.long 0\n";
+    }
+    output << "\n.text\n";
+
+    for (auto& func : program.functions) {
+        generateFunction(*func);
+    }
+}
 
 void CodeGenerator::generateFunction(FunctionIR& func) {
     output << "\t.globl " << func.name << "\n";
     output << func.name << ":\n";
     
-    output << "\tpushq %rbp\n";
-    output << "\tmovq %rsp, %rbp\n";
-    
     stackOffset = 0;
     variableOffsets.clear();
+    assignTempOffsets(func, variableOffsets, stackOffset);
+    int frameSize = alignTo16(-stackOffset);
+
+    output << "\tpushq %rbp\n";
+    output << "\tmovq %rsp, %rbp\n";
+    if (frameSize > 0) {
+        output << "\tsubq $" << frameSize << ", %rsp\n";
+    }
     
     for (auto& block : func.blocks) {
         generateBasicBlock(*block);
     }
     
+    output << "\tmovq %rbp, %rsp\n";
     output << "\tpopq %rbp\n";
     output << "\tret\n";
 }
@@ -66,9 +107,7 @@ void CodeGenerator::generateBasicBlock(BasicBlock& block) {
                 std::string result = instr->result;
                 std::string value = instr->operands[0];
                 output << "\tmovl $" << value << ", %eax\n";
-                variableOffsets[result] = stackOffset;
-                stackOffset -= 4;
-                output << "\tpushl %eax\n";
+                storeTemp(output, variableOffsets, result);
                 break;
             }
             case IROpcode::LOAD: {
@@ -78,11 +117,9 @@ void CodeGenerator::generateBasicBlock(BasicBlock& block) {
                     int offset = variableOffsets[var];
                     output << "\tmovl " << offset << "(%rbp), %eax\n";
                 } else {
-                    output << "\tmovl " << var << ", %eax\n";
+                    output << "\tmovl " << asmOperand(var) << ", %eax\n";
                 }
-                variableOffsets[result] = stackOffset;
-                stackOffset -= 4;
-                output << "\tpushl %eax\n";
+                storeTemp(output, variableOffsets, result);
                 break;
             }
             case IROpcode::STORE: {
@@ -92,7 +129,7 @@ void CodeGenerator::generateBasicBlock(BasicBlock& block) {
                     int offset = variableOffsets[value];
                     output << "\tmovl " << offset << "(%rbp), %eax\n";
                 } else {
-                    output << "\tmovl " << value << ", %eax\n";
+                    output << "\tmovl " << asmOperand(value) << ", %eax\n";
                 }
                 output << "\tmovl %eax, " << var << "\n";
                 break;
@@ -106,19 +143,17 @@ void CodeGenerator::generateBasicBlock(BasicBlock& block) {
                     int offset = variableOffsets[left];
                     output << "\tmovl " << offset << "(%rbp), %eax\n";
                 } else {
-                    output << "\tmovl " << left << ", %eax\n";
+                    output << "\tmovl " << asmOperand(left) << ", %eax\n";
                 }
                 
                 if (variableOffsets.find(right) != variableOffsets.end()) {
                     int offset = variableOffsets[right];
                     output << "\taddl " << offset << "(%rbp), %eax\n";
                 } else {
-                    output << "\taddl " << right << ", %eax\n";
+                    output << "\taddl " << asmOperand(right) << ", %eax\n";
                 }
                 
-                variableOffsets[result] = stackOffset;
-                stackOffset -= 4;
-                output << "\tpushl %eax\n";
+                storeTemp(output, variableOffsets, result);
                 break;
             }
             case IROpcode::SUB: {
@@ -130,19 +165,17 @@ void CodeGenerator::generateBasicBlock(BasicBlock& block) {
                     int offset = variableOffsets[left];
                     output << "\tmovl " << offset << "(%rbp), %eax\n";
                 } else {
-                    output << "\tmovl " << left << ", %eax\n";
+                    output << "\tmovl " << asmOperand(left) << ", %eax\n";
                 }
                 
                 if (variableOffsets.find(right) != variableOffsets.end()) {
                     int offset = variableOffsets[right];
                     output << "\tsubl " << offset << "(%rbp), %eax\n";
                 } else {
-                    output << "\tsubl " << right << ", %eax\n";
+                    output << "\tsubl " << asmOperand(right) << ", %eax\n";
                 }
                 
-                variableOffsets[result] = stackOffset;
-                stackOffset -= 4;
-                output << "\tpushl %eax\n";
+                storeTemp(output, variableOffsets, result);
                 break;
             }
             case IROpcode::MUL: {
@@ -154,7 +187,7 @@ void CodeGenerator::generateBasicBlock(BasicBlock& block) {
                     int offset = variableOffsets[left];
                     output << "\tmovl " << offset << "(%rbp), %eax\n";
                 } else {
-                    output << "\tmovl " << left << ", %eax\n";
+                    output << "\tmovl " << asmOperand(left) << ", %eax\n";
                 }
                 
                 if (variableOffsets.find(right) != variableOffsets.end()) {
@@ -164,9 +197,7 @@ void CodeGenerator::generateBasicBlock(BasicBlock& block) {
                     output << "\timull " << right << "\n";
                 }
                 
-                variableOffsets[result] = stackOffset;
-                stackOffset -= 4;
-                output << "\tpushl %eax\n";
+                storeTemp(output, variableOffsets, result);
                 break;
             }
             case IROpcode::DIV: {
@@ -179,7 +210,7 @@ void CodeGenerator::generateBasicBlock(BasicBlock& block) {
                     int offset = variableOffsets[left];
                     output << "\tmovl " << offset << "(%rbp), %eax\n";
                 } else {
-                    output << "\tmovl " << left << ", %eax\n";
+                    output << "\tmovl " << asmOperand(left) << ", %eax\n";
                 }
                 
                 if (variableOffsets.find(right) != variableOffsets.end()) {
@@ -189,29 +220,86 @@ void CodeGenerator::generateBasicBlock(BasicBlock& block) {
                     output << "\tidivl " << right << "\n";
                 }
                 
-                variableOffsets[result] = stackOffset;
-                stackOffset -= 4;
-                output << "\tpushl %eax\n";
+                storeTemp(output, variableOffsets, result);
                 break;
             }
+            // ---- Comparison instructions (produce 0 or 1) ----
+            case IROpcode::CMP_EQ:
+            case IROpcode::CMP_NE:
+            case IROpcode::CMP_LT:
+            case IROpcode::CMP_GT:
+            case IROpcode::CMP_LE:
+            case IROpcode::CMP_GE: {
+                std::string result = instr->result;
+                std::string left = instr->operands[0];
+                std::string right = instr->operands[1];
+
+                // Load left operand
+                if (variableOffsets.find(left) != variableOffsets.end()) {
+                    output << "\tmovl " << variableOffsets[left] << "(%rbp), %eax\n";
+                } else {
+                    output << "\tmovl " << asmOperand(left) << ", %eax\n";
+                }
+                // Compare with right operand
+                if (variableOffsets.find(right) != variableOffsets.end()) {
+                    output << "\tcmpl " << variableOffsets[right] << "(%rbp), %eax\n";
+                } else {
+                    output << "\tcmpl " << asmOperand(right) << ", %eax\n";
+                }
+                // Set condition flag byte
+                const char* setcc = "";
+                switch (instr->opcode) {
+                    case IROpcode::CMP_EQ: setcc = "sete";  break;
+                    case IROpcode::CMP_NE: setcc = "setne"; break;
+                    case IROpcode::CMP_LT: setcc = "setl";  break;
+                    case IROpcode::CMP_GT: setcc = "setg";  break;
+                    case IROpcode::CMP_LE: setcc = "setle"; break;
+                    case IROpcode::CMP_GE: setcc = "setge"; break;
+                    default: break;
+                }
+                output << "\t" << setcc << " %al\n";
+                output << "\tmovzbl %al, %eax\n";
+
+                storeTemp(output, variableOffsets, result);
+                break;
+            }
+
+            // ---- Branch instructions ----
             case IROpcode::BRANCH: {
                 std::string target = instr->operands[0];
                 output << "\tjmp " << target << "\n";
                 break;
             }
-            case IROpcode::BRANCH_EQ: {
+            case IROpcode::BRANCH_EQ:
+            case IROpcode::BRANCH_NE:
+            case IROpcode::BRANCH_LT:
+            case IROpcode::BRANCH_GT:
+            case IROpcode::BRANCH_LE:
+            case IROpcode::BRANCH_GE: {
                 std::string cond = instr->operands[0];
                 std::string value = instr->operands[1];
                 std::string target = instr->operands[2];
-                
+
+                // Load condition value
                 if (variableOffsets.find(cond) != variableOffsets.end()) {
                     int offset = variableOffsets[cond];
                     output << "\tmovl " << offset << "(%rbp), %eax\n";
                 } else {
-                    output << "\tmovl " << cond << ", %eax\n";
+                    output << "\tmovl " << asmOperand(cond) << ", %eax\n";
                 }
-                output << "\tcmp $" << value << ", %eax\n";
-                output << "\tje " << target << "\n";
+                output << "\tcmpl $" << value << ", %eax\n";
+
+                const char* jcc = "";
+                switch (instr->opcode) {
+                    case IROpcode::BRANCH_EQ: jcc = "je";  break;
+                    case IROpcode::BRANCH_NE: jcc = "jne"; break;
+                    case IROpcode::BRANCH_LT: jcc = "jl";  break;
+                    case IROpcode::BRANCH_GT: jcc = "jg";  break;
+                    case IROpcode::BRANCH_LE: jcc = "jle"; break;
+                    case IROpcode::BRANCH_GE: jcc = "jge"; break;
+                    default: break;
+                }
+                output << "\t" << jcc << " " << target << "\n";
                 break;
             }
             case IROpcode::RET: {
@@ -221,7 +309,7 @@ void CodeGenerator::generateBasicBlock(BasicBlock& block) {
                         int offset = variableOffsets[value];
                         output << "\tmovl " << offset << "(%rbp), %eax\n";
                     } else {
-                        output << "\tmovl " << value << ", %eax\n";
+                        output << "\tmovl " << asmOperand(value) << ", %eax\n";
                     }
                 }
                 break;

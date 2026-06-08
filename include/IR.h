@@ -10,7 +10,9 @@ enum class IROpcode {
     CONST,
     BRANCH, BRANCH_EQ, BRANCH_NE, BRANCH_LT, BRANCH_GT, BRANCH_LE, BRANCH_GE,
     CALL, RET,
-    PHI
+    PHI,
+    // Comparison (produce 0 or 1)
+    CMP_EQ, CMP_NE, CMP_LT, CMP_GT, CMP_LE, CMP_GE
 };
 
 class IRInstruction {
