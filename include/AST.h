@@ -7,19 +7,14 @@
 enum class ASTNodeType {
     PROGRAM,
     DECLARATION,
-    FUNCTION_DEFINITION,
-    STATEMENT,
-    EXPRESSION,
-    NUMBER,
-    IDENTIFIER,
-    BINARY_OP,
-    UNARY_OP,
     ASSIGNMENT,
     IF_STATEMENT,
     WHILE_STATEMENT,
-    FOR_STATEMENT,
-    RETURN_STATEMENT,
-    BLOCK
+    BLOCK,
+    BINARY_OP,
+    UNARY_OP,
+    IDENTIFIER,
+    NUMBER
 };
 
 class ASTNode {
@@ -36,13 +31,10 @@ using ASTNodePtr = std::unique_ptr<ASTNode>;
 
 class NumberNode : public ASTNode {
 public:
-    std::variant<int, double> value;
-    bool isFloat;
+    int value;
 
     NumberNode(int val, int l, int c) 
-        : ASTNode(ASTNodeType::NUMBER, l, c), value(val), isFloat(false) {}
-    NumberNode(double val, int l, int c) 
-        : ASTNode(ASTNodeType::NUMBER, l, c), value(val), isFloat(true) {}
+        : ASTNode(ASTNodeType::NUMBER, l, c), value(val) {}
 };
 
 class IdentifierNode : public ASTNode {
@@ -86,6 +78,10 @@ public:
     std::vector<ASTNodePtr> statements;
 
     BlockNode(int l, int c) : ASTNode(ASTNodeType::BLOCK, l, c) {}
+    
+    void addStatement(ASTNodePtr stmt) {
+        statements.push_back(std::move(stmt));
+    }
 };
 
 class IfStatementNode : public ASTNode {
@@ -109,40 +105,6 @@ public:
           condition(std::move(cond)), body(std::move(b)) {}
 };
 
-class ForStatementNode : public ASTNode {
-public:
-    ASTNodePtr init;
-    ASTNodePtr condition;
-    ASTNodePtr increment;
-    ASTNodePtr body;
-
-    ForStatementNode(ASTNodePtr i, ASTNodePtr cond, ASTNodePtr inc, ASTNodePtr b, int line, int col)
-        : ASTNode(ASTNodeType::FOR_STATEMENT, line, col), 
-          init(std::move(i)), condition(std::move(cond)), increment(std::move(inc)), body(std::move(b)) {}
-};
-
-class ReturnStatementNode : public ASTNode {
-public:
-    ASTNodePtr value;
-
-    ReturnStatementNode(ASTNodePtr v, int line, int col)
-        : ASTNode(ASTNodeType::RETURN_STATEMENT, line, col), value(std::move(v)) {}
-};
-
-class FunctionDefinitionNode : public ASTNode {
-public:
-    std::string name;
-    std::string returnType;
-    std::vector<std::pair<std::string, std::string>> parameters;
-    ASTNodePtr body;
-
-    FunctionDefinitionNode(const std::string& n, const std::string& rt, 
-                           const std::vector<std::pair<std::string, std::string>>& params, 
-                           ASTNodePtr b, int line, int col)
-        : ASTNode(ASTNodeType::FUNCTION_DEFINITION, line, col), 
-          name(n), returnType(rt), parameters(params), body(std::move(b)) {}
-};
-
 class DeclarationNode : public ASTNode {
 public:
     std::string type;
@@ -157,7 +119,15 @@ public:
 class ProgramNode : public ASTNode {
 public:
     std::vector<ASTNodePtr> declarations;
-    std::vector<ASTNodePtr> functions;
+    std::vector<ASTNodePtr> statements;
 
     ProgramNode() : ASTNode(ASTNodeType::PROGRAM, 0, 0) {}
+    
+    void addDeclaration(ASTNodePtr decl) {
+        declarations.push_back(std::move(decl));
+    }
+    
+    void addStatement(ASTNodePtr stmt) {
+        statements.push_back(std::move(stmt));
+    }
 };
