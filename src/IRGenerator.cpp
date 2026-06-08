@@ -1,37 +1,34 @@
-#include "../include/AST.h"
-#include "../include/IR.h"
-#include <memory>
+#include "../include/IRGenerator.h"
 #include <sstream>
+#include <algorithm>
 
-class IRGenerator {
-private:
-    IRProgram program;
-    FunctionIR* currentFunction;
-    BasicBlock* currentBlock;
-    int tempCounter;
-
-    std::string newTemp() {
-        std::stringstream ss;
-        ss << "%t" << tempCounter++;
-        return ss.str();
+static void addGlobalVariable(IRProgram& program, const std::string& name) {
+    if (std::find(program.globalVariables.begin(), program.globalVariables.end(), name) ==
+        program.globalVariables.end()) {
+        program.globalVariables.push_back(name);
     }
+}
 
-    std::string generateExpression(ASTNode* node);
-    void generateStatement(ASTNode* node);
-    void generateFunctionDefinition(FunctionDefinitionNode* node);
+std::string IRGenerator::newTemp() {
+    std::stringstream ss;
+    ss << "%t" << tempCounter++;
+    return ss.str();
+}
 
-public:
-    IRGenerator() : currentFunction(nullptr), currentBlock(nullptr), tempCounter(0) {}
+std::string IRGenerator::newLabel(const std::string& prefix) {
+    std::stringstream ss;
+    ss << prefix << "_" << labelCounter++;
+    return ss.str();
+}
 
-    IRProgram generate(ASTNode* root) {
-        if (auto programNode = dynamic_cast<ProgramNode*>(root)) {
-            for (auto& func : programNode->functions) {
-                generateFunctionDefinition(dynamic_cast<FunctionDefinitionNode*>(func.get()));
-            }
+IRProgram IRGenerator::generate(ASTNode* root) {
+    if (auto programNode = dynamic_cast<ProgramNode*>(root)) {
+        for (auto& func : programNode->functions) {
+            generateFunctionDefinition(dynamic_cast<FunctionDefinitionNode*>(func.get()));
         }
-        return std::move(program);
     }
-};
+    return std::move(program);
+}
 
 void IRGenerator::generateFunctionDefinition(FunctionDefinitionNode* node) {
     currentFunction = program.createFunction(node->name);
@@ -68,12 +65,15 @@ void IRGenerator::generateStatement(ASTNode* node) {
             auto ifStmt = dynamic_cast<IfStatementNode*>(node);
             std::string cond = generateExpression(ifStmt->condition.get());
             
-            BasicBlock* thenBlock = currentFunction->createBlock("then");
-            BasicBlock* elseBlock = currentFunction->createBlock("else");
-            BasicBlock* mergeBlock = currentFunction->createBlock("merge");
+            BasicBlock* thenBlock = currentFunction->createBlock(newLabel("then"));
+            BasicBlock* elseBlock = currentFunction->createBlock(newLabel("else"));
+            BasicBlock* mergeBlock = currentFunction->createBlock(newLabel("merge"));
 
+            // if cond == 1 (true), jump to thenBlock; else fall through to elseBlock
             currentBlock->addInstruction(std::make_unique<IRInstruction>(
-                IROpcode::BRANCH_EQ, "", std::vector<std::string>{cond, "1", thenBlock->name, elseBlock->name}));
+                IROpcode::BRANCH_EQ, "", std::vector<std::string>{cond, "1", thenBlock->name}));
+            currentBlock->addInstruction(std::make_unique<IRInstruction>(
+                IROpcode::BRANCH, "", std::vector<std::string>{elseBlock->name}));
 
             currentBlock = thenBlock;
             generateStatement(ifStmt->thenBranch.get());
@@ -92,17 +92,20 @@ void IRGenerator::generateStatement(ASTNode* node) {
         }
         case ASTNodeType::WHILE_STATEMENT: {
             auto whileStmt = dynamic_cast<WhileStatementNode*>(node);
-            BasicBlock* condBlock = currentFunction->createBlock("while_cond");
-            BasicBlock* bodyBlock = currentFunction->createBlock("while_body");
-            BasicBlock* exitBlock = currentFunction->createBlock("while_exit");
+            BasicBlock* condBlock = currentFunction->createBlock(newLabel("while_cond"));
+            BasicBlock* bodyBlock = currentFunction->createBlock(newLabel("while_body"));
+            BasicBlock* exitBlock = currentFunction->createBlock(newLabel("while_exit"));
 
             currentBlock->addInstruction(std::make_unique<IRInstruction>(
                 IROpcode::BRANCH, "", std::vector<std::string>{condBlock->name}));
 
             currentBlock = condBlock;
             std::string cond = generateExpression(whileStmt->condition.get());
+            // if cond == 1 (true), jump to body; else fall through to exit
             currentBlock->addInstruction(std::make_unique<IRInstruction>(
-                IROpcode::BRANCH_EQ, "", std::vector<std::string>{cond, "1", bodyBlock->name, exitBlock->name}));
+                IROpcode::BRANCH_EQ, "", std::vector<std::string>{cond, "1", bodyBlock->name}));
+            currentBlock->addInstruction(std::make_unique<IRInstruction>(
+                IROpcode::BRANCH, "", std::vector<std::string>{exitBlock->name}));
 
             currentBlock = bodyBlock;
             generateStatement(whileStmt->body.get());
@@ -120,7 +123,7 @@ void IRGenerator::generateStatement(ASTNode* node) {
                     IROpcode::RET, "", std::vector<std::string>{value}));
             } else {
                 currentBlock->addInstruction(std::make_unique<IRInstruction>(
-                    IROpcode::RET, "", {}));
+                    IROpcode::RET, "", std::vector<std::string>{}));
             }
             break;
         }
@@ -133,6 +136,7 @@ void IRGenerator::generateStatement(ASTNode* node) {
         }
         case ASTNodeType::DECLARATION: {
             auto decl = dynamic_cast<DeclarationNode*>(node);
+            addGlobalVariable(program, decl->name);
             if (decl->initializer) {
                 std::string value = generateExpression(decl->initializer.get());
                 currentBlock->addInstruction(std::make_unique<IRInstruction>(
@@ -177,6 +181,12 @@ std::string IRGenerator::generateExpression(ASTNode* node) {
             else if (binOp->op == "-") opcode = IROpcode::SUB;
             else if (binOp->op == "*") opcode = IROpcode::MUL;
             else if (binOp->op == "/") opcode = IROpcode::DIV;
+            else if (binOp->op == "==") opcode = IROpcode::CMP_EQ;
+            else if (binOp->op == "!=") opcode = IROpcode::CMP_NE;
+            else if (binOp->op == "<")  opcode = IROpcode::CMP_LT;
+            else if (binOp->op == ">")  opcode = IROpcode::CMP_GT;
+            else if (binOp->op == "<=") opcode = IROpcode::CMP_LE;
+            else if (binOp->op == ">=") opcode = IROpcode::CMP_GE;
             else return "";
 
             currentBlock->addInstruction(std::make_unique<IRInstruction>(
