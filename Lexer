@@ -1,0 +1,163 @@
+#include "Lexer.h"
+
+#include <iostream>
+#include <cctype>
+#include <unordered_map>
+#include <vector>
+#include <string>
+
+// ---------------- Lexer 方法实现 ----------------
+
+Lexer::Lexer(const std::string& src)
+    : source(src), pos(0), line(1), column(1)
+{
+    keywords = {
+        {"int", TokenType::INT},
+        {"if", TokenType::IF},
+        {"else", TokenType::ELSE},
+        {"while", TokenType::WHILE}
+    };
+}
+
+char Lexer::peek() const
+{
+    return source[pos];
+}
+
+char Lexer::advance()
+{
+    char c = source[pos++];
+    if (c == '\n') { line++; column = 1; }
+    else { column++; }
+    return c;
+}
+
+bool Lexer::match(char expected)
+{
+    if (isAtEnd() || source[pos] != expected) return false;
+    pos++; column++;
+    return true;
+}
+
+bool Lexer::isAtEnd() const
+{
+    return pos >= source.size();
+}
+
+void Lexer::skipWhitespaceAndComments()
+{
+    while (!isAtEnd())
+    {
+        char ch = peek();
+        if (isspace(ch)) advance();
+        else if (ch == '/' && pos + 1 < source.size() && source[pos + 1] == '/')
+        {
+            while (!isAtEnd() && peek() != '\n') advance();
+        }
+        else break;
+    }
+}
+
+Token Lexer::number()
+{
+    int startCol = column;
+    std::string numStr;
+    while (!isAtEnd() && isdigit(peek()))
+        numStr += advance();
+    return Token(TokenType::NUM, numStr, line, startCol);
+}
+
+Token Lexer::identifier()
+{
+    int startCol = column;
+    std::string idStr;
+    while (!isAtEnd() && (isalnum(peek()) || peek() == '_'))
+        idStr += advance();
+
+    if (keywords.count(idStr))
+        return Token(keywords[idStr], idStr, line, startCol);
+
+    return Token(TokenType::ID, idStr, line, startCol);
+}
+
+Token Lexer::getNextToken()
+{
+    skipWhitespaceAndComments();
+
+    if (isAtEnd())
+        return Token(TokenType::END, "EOF", line, column);
+
+    char ch = peek();
+
+    if (isdigit(ch)) return number();
+    if (isalpha(ch) || ch == '_') return identifier();
+
+    switch (ch)
+    {
+    case '+': advance(); return Token(TokenType::PLUS, "+", line, column - 1);
+    case '-': advance(); return Token(TokenType::MINUS, "-", line, column - 1);
+    case '*': advance(); return Token(TokenType::MUL, "*", line, column - 1);
+    case '/': advance(); return Token(TokenType::DIV, "/", line, column - 1);
+    case '<': advance(); return Token(TokenType::LT, "<", line, column - 1);
+    case '>': advance(); return Token(TokenType::GT, ">", line, column - 1);
+    case '=':
+        advance();
+        if (match('=')) return Token(TokenType::EQ, "==", line, column - 2);
+        else return Token(TokenType::ASSIGN, "=", line, column - 1);
+    case '(': advance(); return Token(TokenType::LPAREN, "(", line, column - 1);
+    case ')': advance(); return Token(TokenType::RPAREN, ")", line, column - 1);
+    case '{': advance(); return Token(TokenType::LBRACE, "{", line, column - 1);
+    case '}': advance(); return Token(TokenType::RBRACE, "}", line, column - 1);
+    case ';': advance(); return Token(TokenType::SEMI, ";", line, column - 1);
+    case ',': advance(); return Token(TokenType::COMMA, ",", line, column - 1);
+    default:
+        advance();
+        return Token(TokenType::ERROR_TOKEN, std::string(1, ch), line, column - 1);
+    }
+}
+
+std::vector<Token> Lexer::tokenize()
+{
+    std::vector<Token> tokens;
+    while (true)
+    {
+        Token t = getNextToken();
+        tokens.push_back(t);
+        if (t.type == TokenType::END) break;
+    }
+    return tokens;
+}
+
+// ---------------- main 测试 ----------------
+
+int main()
+{
+    std::string code;
+    std::string line;
+
+    std::cout << "请输入代码，输入 END 结束：" << std::endl;
+
+    while (std::getline(std::cin, line))
+    {
+        if (line == "END")
+            break;
+
+        code += line + "\n";
+    }
+
+    Lexer lexer(code);
+
+    auto tokens = lexer.tokenize();
+
+    for (const auto& t : tokens)
+    {
+        std::cout
+            << t.lexeme
+            << "  type=" << static_cast<int>(t.type)
+            << "  line=" << t.line
+            << " col=" << t.column
+            << std::endl;
+    }
+
+    return 0;
+}
