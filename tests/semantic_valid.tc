@@ -1,0 +1,8 @@
+int total = 0;
+{
+    int step = 2;
+    total = total + step;
+}
+while (total < 6) {
+    total = total + 1;
+}
