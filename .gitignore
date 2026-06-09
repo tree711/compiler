@@ -1,0 +1,4 @@
+build/
+semantic_test
+*.o
+*.exe
