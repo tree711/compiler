@@ -82,7 +82,7 @@ void Optimizer::copyPropagation(FunctionIR& func) {
                 continue;
             }
             
-            // Replace operands with their propagated values
+            // 使用传播后的值替换操作数
             for (std::string& op : instr->operands) {
                 auto it = copyMap.find(op);
                 if (it != copyMap.end()) {
@@ -90,7 +90,7 @@ void Optimizer::copyPropagation(FunctionIR& func) {
                 }
             }
             
-            // If this instruction defines a new value, invalidate old mapping for its result
+            // 指令产生新值时，使该结果原有的传播映射失效
             bool definesNewValue = instr->opcode == IROpcode::CONST ||
                                    instr->opcode == IROpcode::ADD ||
                                    instr->opcode == IROpcode::SUB ||
@@ -125,14 +125,14 @@ void Optimizer::copyPropagation(FunctionIR& func) {
 }
 
 void Optimizer::deadCodeElimination(FunctionIR& func) {
-    // Collect all temporaries that are used across all blocks
+    // 收集所有基本块中被使用的临时变量
     std::unordered_map<std::string, bool> used;
     
-    // First pass: mark all temporaries that appear as operands (i.e., are used)
+    // 第一遍扫描：标记所有作为操作数出现的临时变量
     for (auto& block : func.blocks) {
         for (auto& instr : block->instructions) {
-            // STORE has side effects (writing to variables) — always keep
-            // BRANCH and RET are control flow — always keep
+            // STORE 会写入变量，具有副作用，必须保留
+            // BRANCH 和 RET 属于控制流指令，必须保留
             if (instr->opcode == IROpcode::STORE ||
                 instr->opcode == IROpcode::BRANCH ||
                 instr->opcode == IROpcode::BRANCH_EQ ||
@@ -142,7 +142,7 @@ void Optimizer::deadCodeElimination(FunctionIR& func) {
                 instr->opcode == IROpcode::BRANCH_LE ||
                 instr->opcode == IROpcode::BRANCH_GE ||
                 instr->opcode == IROpcode::RET) {
-                // These always survive, and their operands are "used"
+                // 这些指令必须保留，其操作数也应视为已使用
                 for (const std::string& op : instr->operands) {
                     if (!op.empty() && op[0] == '%') {
                         used[op] = true;
@@ -152,7 +152,7 @@ void Optimizer::deadCodeElimination(FunctionIR& func) {
         }
     }
     
-    // Iteratively mark temps needed by other used temps
+    // 迭代标记其他已使用临时变量所依赖的值
     bool changed = true;
     while (changed) {
         changed = false;
@@ -170,7 +170,7 @@ void Optimizer::deadCodeElimination(FunctionIR& func) {
         }
     }
     
-    // Remove dead instructions in each block
+    // 删除各基本块中的无效指令
     for (auto& block : func.blocks) {
         std::vector<std::unique_ptr<IRInstruction>> newInstructions;
         for (auto& instr : block->instructions) {

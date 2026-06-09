@@ -61,7 +61,7 @@ void IRGenerator::generateStatement(ASTNode* node) {
             BasicBlock* elseBlock = currentFunction->createBlock(newLabel("else"));
             BasicBlock* mergeBlock = currentFunction->createBlock(newLabel("merge"));
 
-            // if cond == 1 (true), jump to thenBlock; else fall through to elseBlock
+            // 条件为 1 时进入真分支，否则进入假分支
             currentBlock->addInstruction(std::make_unique<IRInstruction>(
                 IROpcode::BRANCH_EQ, "", std::vector<std::string>{cond, "1", thenBlock->name}));
             currentBlock->addInstruction(std::make_unique<IRInstruction>(
@@ -93,7 +93,7 @@ void IRGenerator::generateStatement(ASTNode* node) {
 
             currentBlock = condBlock;
             std::string cond = generateExpression(whileStmt->condition.get());
-            // if cond == 1 (true), jump to body; else fall through to exit
+            // 条件为 1 时进入循环体，否则退出循环
             currentBlock->addInstruction(std::make_unique<IRInstruction>(
                 IROpcode::BRANCH_EQ, "", std::vector<std::string>{cond, "1", bodyBlock->name}));
             currentBlock->addInstruction(std::make_unique<IRInstruction>(

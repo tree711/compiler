@@ -24,7 +24,7 @@ public:
     }
 };
 
-}  // namespace
+}  // 匿名命名空间
 
 SymbolTable::SymbolTable() : scopes(1) {}
 
@@ -41,8 +41,8 @@ void SymbolTable::exitScope() {
 
 bool SymbolTable::declare(
     const std::string& name, SymbolType type, int line, int column) {
-    // The backend currently emits variables by source name, so shadowing
-    // would map distinct declarations to the same assembly symbol.
+    // 后端目前直接使用源代码变量名生成汇编符号。
+    // 若允许同名变量遮蔽，不同声明会被映射到同一个汇编符号。
     if (lookup(name)) {
         return false;
     }
