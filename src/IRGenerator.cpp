@@ -23,8 +23,43 @@ std::string IRGenerator::newLabel(const std::string& prefix) {
 
 IRProgram IRGenerator::generate(ASTNode* root) {
     if (auto programNode = dynamic_cast<ProgramNode*>(root)) {
-        for (auto& func : programNode->functions) {
-            generateFunctionDefinition(dynamic_cast<FunctionDefinitionNode*>(func.get()));
+        // 情况1：有函数定义
+        if (!programNode->functions.empty()) {
+            for (auto& func : programNode->functions) {
+                generateFunctionDefinition(dynamic_cast<FunctionDefinitionNode*>(func.get()));
+            }
+        }
+        // 情况2：没有函数定义，只有全局语句（TinyC 风格）
+        else if (!programNode->children.empty()) {
+            // 创建默认的 main 函数
+            currentFunction = program.createFunction("main");
+            currentBlock = currentFunction->createBlock("entry");
+            currentFunction->entry = currentBlock;
+            
+            // 处理所有全局语句
+            for (auto& child : programNode->children) {
+                generateStatement(child.get());
+            }
+            
+            // 添加默认返回
+            currentBlock->addInstruction(std::make_unique<IRInstruction>(
+                IROpcode::RET, "", std::vector<std::string>{"0"}));
+        }
+        // 情况3：有全局声明
+        else if (!programNode->declarations.empty()) {
+            // 创建默认的 main 函数
+            currentFunction = program.createFunction("main");
+            currentBlock = currentFunction->createBlock("entry");
+            currentFunction->entry = currentBlock;
+            
+            // 处理全局声明
+            for (auto& decl : programNode->declarations) {
+                generateStatement(decl.get());
+            }
+            
+            // 添加默认返回
+            currentBlock->addInstruction(std::make_unique<IRInstruction>(
+                IROpcode::RET, "", std::vector<std::string>{"0"}));
         }
     }
     return std::move(program);
@@ -56,9 +91,28 @@ void IRGenerator::generateStatement(ASTNode* node) {
     switch (node->type) {
         case ASTNodeType::ASSIGNMENT: {
             auto assign = dynamic_cast<AssignmentNode*>(node);
-            std::string value = generateExpression(assign->value.get());
-            currentBlock->addInstruction(std::make_unique<IRInstruction>(
-                IROpcode::STORE, assign->name, std::vector<std::string>{value}));
+            std::string varName;
+            std::string value;
+            
+            // 支持两种 AssignmentNode 构造方式
+            if (!assign->name.empty()) {
+                // 新方式：name + value
+                varName = assign->name;
+                value = generateExpression(assign->value.get());
+            } else if (assign->left) {
+                // 旧方式：left + right
+                auto ident = dynamic_cast<IdentifierNode*>(assign->left.get());
+                if (ident) {
+                    varName = ident->name;
+                }
+                value = generateExpression(assign->right.get());
+            }
+            
+            if (!varName.empty()) {
+                addGlobalVariable(program, varName);
+                currentBlock->addInstruction(std::make_unique<IRInstruction>(
+                    IROpcode::STORE, varName, std::vector<std::string>{value}));
+            }
             break;
         }
         case ASTNodeType::IF_STATEMENT: {
@@ -136,11 +190,21 @@ void IRGenerator::generateStatement(ASTNode* node) {
         }
         case ASTNodeType::DECLARATION: {
             auto decl = dynamic_cast<DeclarationNode*>(node);
-            addGlobalVariable(program, decl->name);
-            if (decl->initializer) {
-                std::string value = generateExpression(decl->initializer.get());
-                currentBlock->addInstruction(std::make_unique<IRInstruction>(
-                    IROpcode::STORE, decl->name, std::vector<std::string>{value}));
+            
+            // 支持多变量声明
+            if (!decl->variables.empty()) {
+                for (auto& var : decl->variables) {
+                    addGlobalVariable(program, var->name);
+                }
+            }
+            // 支持单变量声明
+            else if (!decl->name.empty()) {
+                addGlobalVariable(program, decl->name);
+                if (decl->initializer) {
+                    std::string value = generateExpression(decl->initializer.get());
+                    currentBlock->addInstruction(std::make_unique<IRInstruction>(
+                        IROpcode::STORE, decl->name, std::vector<std::string>{value}));
+                }
             }
             break;
         }

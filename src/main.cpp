@@ -1,27 +1,240 @@
 /**
- * TinyC 编译器后端测试
+ * TinyC 编译器主程序
  * 
- * 由于 Parser 尚未完整实现，测试用例通过
- * 手动构造 AST 节点来验证后端各模块。
+ * 完整的编译流程：源代码 → 词法分析 → 语法分析 → 语义分析 → 中间代码 → 优化 → 汇编代码
+ * 
+ * 用法: ./compiler <源文件> [-o 输出文件] [-v] [-O]
+ *   -o: 指定输出文件名（默认 output.s）
+ *   -v: 详细模式，显示各阶段输出
+ *   -O: 启用优化
  */
 
+#include "../include/Token.h"
 #include "../include/AST.h"
+#include "../include/Symbol.h"
 #include "../include/IR.h"
 #include "../include/IRGenerator.h"
 #include "../include/Optimizer.h"
 #include "../include/CodeGenerator.h"
 #include <iostream>
-#include <sstream>
-#include <cassert>
 #include <fstream>
+#include <sstream>
+#include <memory>
+#include <cstring>
 
+// Parser 类声明（实现在 Parser.cpp）
+class Parser {
+private:
+    Lexer& lexer;
+    Token currentToken;
 
+    void eat(TokenType expected) {
+        if (currentToken.type == expected) {
+            currentToken = lexer.getNextToken();
+        } else {
+            std::stringstream ss;
+            ss << "Syntax error at line " << currentToken.line << ", column " << currentToken.column 
+               << ": unexpected token '" << currentToken.lexeme 
+               << "', expected token of type " << static_cast<int>(expected);
+            throw std::runtime_error(ss.str());
+        }
+    }
+
+    ASTNodePtr parseProgram();
+    ASTNodePtr parseDeclaration();
+    ASTNodePtr parseStatement();
+    ASTNodePtr parseExpression();
+    ASTNodePtr parseAssignment();
+    ASTNodePtr parseEquality();
+    ASTNodePtr parseRelational();
+    ASTNodePtr parseAdditive();
+    ASTNodePtr parseMultiplicative();
+    ASTNodePtr parseUnary();
+    ASTNodePtr parsePrimary();
+    ASTNodePtr parseBlock();
+    ASTNodePtr parseIfStatement();
+    ASTNodePtr parseWhileStatement();
+
+public:
+    Parser(Lexer& l) : lexer(l), currentToken(TokenType::END, "", 0, 0) {
+        currentToken = lexer.getNextToken();
+    }
+
+    ASTNodePtr parse() {
+        return parseProgram();
+    }
+};
+
+// SemanticAnalyzer 类声明（实现在 Semantic.cpp）
+class SemanticAnalyzer {
+private:
+    SymbolTable symbolTable;
+
+    void visitProgramNode(ProgramNode* node);
+    void visitDeclarationNode(DeclarationNode* node);
+    void visitFunctionDefinitionNode(FunctionDefinitionNode* node);
+    void visitStatementNode(ASTNode* node);
+    void visitExpressionNode(ASTNode* node);
+    SymbolType visitExpressionAndGetType(ASTNode* node);
+
+public:
+    void analyze(ASTNode* root) {
+        if (!root) return;
+        visitProgramNode(dynamic_cast<ProgramNode*>(root));
+    }
+    
+    SymbolTable& getSymbolTable() { return symbolTable; }
+};
+
+// ========== 配置选项 ==========
+struct CompilerOptions {
+    std::string inputFile;
+    std::string outputFile = "output.s";
+    bool verbose = false;
+    bool optimize = false;
+};
 
 // ========== 辅助函数 ==========
+void printUsage(const char* programName) {
+    std::cout << "TinyC 编译器 v1.0\n";
+    std::cout << "用法: " << programName << " <源文件> [-o 输出文件] [-v] [-O]\n";
+    std::cout << "选项:\n";
+    std::cout << "  -o <文件>  指定输出文件名（默认 output.s）\n";
+    std::cout << "  -v         详细模式，显示各阶段输出\n";
+    std::cout << "  -O         启用优化\n";
+    std::cout << "\n示例:\n";
+    std::cout << "  " << programName << " test.c\n";
+    std::cout << "  " << programName << " test.c -o program.s -v -O\n";
+}
+
 void printSeparator(const std::string& title) {
     std::cout << "\n========================================\n";
     std::cout << "  " << title << "\n";
     std::cout << "========================================\n";
+}
+
+void printTokenList(const std::vector<Token>& tokens) {
+    std::cout << "Token 列表:\n";
+    for (const Token& token : tokens) {
+        std::cout << "  Line " << token.line << ", Col " << token.column 
+                  << ": Type=" << static_cast<int>(token.type) 
+                  << ", Value='" << token.lexeme << "'\n";
+    }
+    std::cout << "共 " << tokens.size() << " 个 Token\n";
+}
+
+void printAST(ASTNode* node, int indent = 0) {
+    if (!node) return;
+    
+    std::string prefix(indent * 2, ' ');
+    
+    switch (node->type) {
+        case ASTNodeType::PROGRAM: {
+            auto prog = static_cast<ProgramNode*>(node);
+            std::cout << prefix << "Program\n";
+            for (auto& child : prog->children) {
+                printAST(child.get(), indent + 1);
+            }
+            break;
+        }
+        case ASTNodeType::DECLARATION: {
+            auto decl = static_cast<DeclarationNode*>(node);
+            std::cout << prefix << "Declaration: " << decl->type << " ";
+            for (size_t i = 0; i < decl->variables.size(); i++) {
+                if (i > 0) std::cout << ", ";
+                std::cout << decl->variables[i]->name;
+            }
+            std::cout << "\n";
+            break;
+        }
+        case ASTNodeType::ASSIGNMENT: {
+            auto assign = static_cast<AssignmentNode*>(node);
+            std::cout << prefix << "Assignment: ";
+            if (assign->left) {
+                printAST(assign->left.get());
+            } else {
+                std::cout << assign->name;
+            }
+            std::cout << " = ";
+            printAST(assign->value ? assign->value.get() : assign->right.get());
+            std::cout << "\n";
+            break;
+        }
+        case ASTNodeType::IF_STATEMENT: {
+            auto ifNode = static_cast<IfStatementNode*>(node);
+            std::cout << prefix << "IfStatement\n";
+            std::cout << prefix << "  Condition: ";
+            printAST(ifNode->condition.get());
+            std::cout << "\n";
+            std::cout << prefix << "  Then:\n";
+            printAST(ifNode->thenBranch.get(), indent + 2);
+            if (ifNode->elseBranch) {
+                std::cout << prefix << "  Else:\n";
+                printAST(ifNode->elseBranch.get(), indent + 2);
+            }
+            break;
+        }
+        case ASTNodeType::WHILE_STATEMENT: {
+            auto whileNode = static_cast<WhileStatementNode*>(node);
+            std::cout << prefix << "WhileStatement\n";
+            std::cout << prefix << "  Condition: ";
+            printAST(whileNode->condition.get());
+            std::cout << "\n";
+            std::cout << prefix << "  Body:\n";
+            printAST(whileNode->body.get(), indent + 2);
+            break;
+        }
+        case ASTNodeType::BLOCK: {
+            auto block = static_cast<BlockNode*>(node);
+            std::cout << prefix << "Block {\n";
+            for (auto& stmt : block->statements) {
+                printAST(stmt.get(), indent + 1);
+            }
+            std::cout << prefix << "}\n";
+            break;
+        }
+        case ASTNodeType::BINARY_OP: {
+            auto binOp = static_cast<BinaryOpNode*>(node);
+            std::cout << "(" << binOp->op << " ";
+            printAST(binOp->left.get());
+            std::cout << " ";
+            printAST(binOp->right.get());
+            std::cout << ")";
+            break;
+        }
+        case ASTNodeType::UNARY_OP: {
+            auto unaryOp = static_cast<UnaryOpNode*>(node);
+            std::cout << "(" << unaryOp->op << " ";
+            printAST(unaryOp->operand.get());
+            std::cout << ")";
+            break;
+        }
+        case ASTNodeType::IDENTIFIER: {
+            auto ident = static_cast<IdentifierNode*>(node);
+            std::cout << ident->name;
+            break;
+        }
+        case ASTNodeType::NUMBER: {
+            auto num = static_cast<NumberNode*>(node);
+            if (num->isFloat) {
+                std::cout << std::get<double>(num->value);
+            } else {
+                std::cout << std::get<int>(num->value);
+            }
+            break;
+        }
+        case ASTNodeType::FOR_STATEMENT:
+        case ASTNodeType::RETURN_STATEMENT:
+        case ASTNodeType::FUNCTION_DEFINITION:
+            // 暂不支持
+            break;
+    }
+}
+
+void printSymbolTable(SymbolTable& symbolTable) {
+    std::cout << "符号表内容:\n";
+    // 由于 SymbolTable 没有提供遍历接口，这里只显示基本信息
+    std::cout << "  当前作用域层级: " << symbolTable.getCurrentScope() << "\n";
 }
 
 void printIR(IRProgram& program) {
@@ -31,15 +244,12 @@ void printIR(IRProgram& program) {
             std::cout << "  Block: " << block->name << "\n";
             for (auto& instr : block->instructions) {
                 std::cout << "    ";
-                // Print label if any
                 if (!instr->label.empty()) {
                     std::cout << instr->label << ": ";
                 }
-                // Print result
                 if (!instr->result.empty()) {
                     std::cout << instr->result << " = ";
                 }
-                // Print opcode
                 switch (instr->opcode) {
                     case IROpcode::ADD:      std::cout << "ADD"; break;
                     case IROpcode::SUB:      std::cout << "SUB"; break;
@@ -66,7 +276,6 @@ void printIR(IRProgram& program) {
                     case IROpcode::CMP_GE:   std::cout << "CMP_GE"; break;
                     default:                 std::cout << "UNKNOWN"; break;
                 }
-                // Print operands
                 for (const auto& op : instr->operands) {
                     std::cout << " " << op;
                 }
@@ -76,393 +285,130 @@ void printIR(IRProgram& program) {
     }
 }
 
-// ============================================================
-//  测试用例 1: 简单算术表达式
-//  c = a + b * 2;
-// ============================================================
-void testArithmeticExpression() {
-    printSeparator("Test 1: Arithmetic expr: c = a + b * 2");
-
-    // 手动构造 AST: c = a + (b * 2)
-    auto identA = std::make_unique<IdentifierNode>("a", 1, 1);
-    auto identB = std::make_unique<IdentifierNode>("b", 1, 1);
-    auto num2   = std::make_unique<NumberNode>(2, 1, 1);
-    auto mul    = std::make_unique<BinaryOpNode>("*", std::move(identB), std::move(num2), 1, 1);
-    auto add    = std::make_unique<BinaryOpNode>("+", std::move(identA), std::move(mul), 1, 1);
-    auto assign = std::make_unique<AssignmentNode>("c", std::move(add), 1, 1);
-
-    auto block = std::make_unique<BlockNode>(1, 1);
-    block->statements.push_back(std::move(assign));
-
-    auto func = std::make_unique<FunctionDefinitionNode>(
-        "main", "int", std::vector<std::pair<std::string, std::string>>{},
-        std::move(block), 1, 1);
-
-    auto program = std::make_unique<ProgramNode>();
-    program->functions.push_back(std::move(func));
-
-    // 生成 IR
-    IRGenerator generator;
-    IRProgram ir = generator.generate(program.get());
-    printIR(ir);
-
-    std::cout << "\n[PASS] Arithmetic expression IR generated\n";
-}
-
-// ============================================================
-//  测试用例 2: 关系表达式 + if 语句
-//  if (c > 5) { c = c + 1; }
-// ============================================================
-void testIfWithRelational() {
-    printSeparator("Test 2: if (c > 5) { c = c + 1; }");
-
-    // AST: if (c > 5) { c = c + 1; }
-    auto identC1  = std::make_unique<IdentifierNode>("c", 1, 1);
-    auto num5     = std::make_unique<NumberNode>(5, 1, 1);
-    auto cond     = std::make_unique<BinaryOpNode>(">", std::move(identC1), std::move(num5), 1, 1);
-
-    auto identC2  = std::make_unique<IdentifierNode>("c", 2, 1);
-    auto num1     = std::make_unique<NumberNode>(1, 2, 1);
-    auto add      = std::make_unique<BinaryOpNode>("+", std::move(identC2), std::move(num1), 2, 1);
-    auto thenAssign = std::make_unique<AssignmentNode>("c", std::move(add), 2, 1);
-
-    auto thenBlock = std::make_unique<BlockNode>(2, 1);
-    thenBlock->statements.push_back(std::move(thenAssign));
-
-    auto ifStmt = std::make_unique<IfStatementNode>(
-        std::move(cond), std::move(thenBlock), nullptr, 1, 1);
-
-    auto body = std::make_unique<BlockNode>(1, 1);
-    body->statements.push_back(std::move(ifStmt));
-
-    auto func = std::make_unique<FunctionDefinitionNode>(
-        "main", "int", std::vector<std::pair<std::string, std::string>>{},
-        std::move(body), 1, 1);
-
-    auto program = std::make_unique<ProgramNode>();
-    program->functions.push_back(std::move(func));
-
-    // 生成 IR
-    IRGenerator generator;
-    IRProgram ir = generator.generate(program.get());
-    printIR(ir);
-
-    std::cout << "\n[PASS] if + relational expression IR generated\n";
-}
-
-// ============================================================
-//  测试用例 3: while 循环
-//  while (c < 20) { c = c + 1; }
-// ============================================================
-void testWhileLoop() {
-    printSeparator("Test 3: while (c < 20) { c = c + 1; }");
-
-    // AST: while (c < 20) { c = c + 1; }
-    auto identC1  = std::make_unique<IdentifierNode>("c", 1, 1);
-    auto num20    = std::make_unique<NumberNode>(20, 1, 1);
-    auto cond     = std::make_unique<BinaryOpNode>("<", std::move(identC1), std::move(num20), 1, 1);
-
-    auto identC2  = std::make_unique<IdentifierNode>("c", 2, 1);
-    auto num1     = std::make_unique<NumberNode>(1, 2, 1);
-    auto add      = std::make_unique<BinaryOpNode>("+", std::move(identC2), std::move(num1), 2, 1);
-    auto bodyAssign = std::make_unique<AssignmentNode>("c", std::move(add), 2, 1);
-
-    auto bodyBlock = std::make_unique<BlockNode>(2, 1);
-    bodyBlock->statements.push_back(std::move(bodyAssign));
-
-    auto whileStmt = std::make_unique<WhileStatementNode>(
-        std::move(cond), std::move(bodyBlock), 1, 1);
-
-    auto body = std::make_unique<BlockNode>(1, 1);
-    body->statements.push_back(std::move(whileStmt));
-
-    auto func = std::make_unique<FunctionDefinitionNode>(
-        "main", "int", std::vector<std::pair<std::string, std::string>>{},
-        std::move(body), 1, 1);
-
-    auto program = std::make_unique<ProgramNode>();
-    program->functions.push_back(std::move(func));
-
-    // 生成 IR
-    IRGenerator generator;
-    IRProgram ir = generator.generate(program.get());
-    printIR(ir);
-
-    std::cout << "\n[PASS] while loop IR generated\n";
-}
-
-// ============================================================
-//  测试用例 4: 直接构造 IR 测试 Optimizer
-//  常量折叠: t1 = 3 + 4  →  t1 = 7
-// ============================================================
-void testConstantFolding() {
-    printSeparator("Test 4: Optimizer - Constant Folding");
-
-    IRProgram program;
-    auto func = program.createFunction("test_const_fold");
-
-    auto entry = func->createBlock("entry");
-    func->entry = entry;
-
-    // 直接使用字面量测试常量折叠: t1 = 3 + 4
-    // 注意: 操作数直接用 "3" 和 "4"（不以 % 开头），而非临时变量
-    entry->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::ADD, "%t1", std::vector<std::string>{"3", "4"}));
-    // 再测试比较折叠: 5 > 3 → 1
-    entry->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::CMP_GT, "%t2", std::vector<std::string>{"5", "3"}));
-    // 加一条 STORE 防止 DCE 删除
-    entry->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::STORE, "x", std::vector<std::string>{"%t1"}));
-    entry->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::STORE, "y", std::vector<std::string>{"%t2"}));
-    entry->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::RET, "", std::vector<std::string>{"0"}));
-
-    std::cout << "=== Before ===\n";
-    printIR(program);
-
-    Optimizer optimizer;
-    optimizer.optimize(program);
-
-    std::cout << "\n=== After ===\n";
-    printIR(program);
-
-    // Verify: ADD 3,4 should fold to CONST 7
-    auto& instrs = entry->instructions;
-    assert(instrs[0]->opcode == IROpcode::CONST);
-    assert(instrs[0]->operands[0] == "7");
-    // 验证: CMP_GT 5,3 应折叠为 CONST 1 (5 > 3)
-    assert(instrs[1]->opcode == IROpcode::CONST);
-    assert(instrs[1]->operands[0] == "1");
-
-    std::cout << "\n[PASS] Constant folding: 3+4->7, 5>3->1\n";
-}
-
-// ============================================================
-//  测试用例 5: Optimizer - 死代码删除
-//  a = 1; a = 2;  删除第一条
-// ============================================================
-void testDeadCodeElimination() {
-    printSeparator("Test 5: Optimizer - Dead Code Elimination");
-
-    IRProgram program;
-    auto func = program.createFunction("test_dce");
-    auto entry = func->createBlock("entry");
-    func->entry = entry;
-
-    // 构造 IR: 
-    //   %t1 = CONST 1
-    //   STORE a, %t1     ← 被后面覆盖
-    //   %t2 = CONST 2
-    //   STORE a, %t2     ← 最终有效
-    //   RET %t2
-    entry->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::CONST, "%t1", std::vector<std::string>{"1"}));
-    entry->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::STORE, "a", std::vector<std::string>{"%t1"}));
-    entry->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::CONST, "%t2", std::vector<std::string>{"2"}));
-    entry->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::STORE, "a", std::vector<std::string>{"%t2"}));
-    entry->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::RET, "", std::vector<std::string>{"%t2"}));
-
-    std::cout << "=== Before ===\n";
-    printIR(program);
-
-    Optimizer optimizer;
-    optimizer.optimize(program);
-
-    std::cout << "\n=== After ===\n";
-    printIR(program);
-
-    // Verify: all instructions survive (%t1 and %t2 used by STORE)
-    // CONST %t1, STORE a,%t1, CONST %t2, STORE a,%t2, RET %t2 = 5
-    auto& instrs = entry->instructions;
-    assert(instrs.size() == 5);
-
-    std::cout << "\n[PASS] DCE preserved all valid instructions\n";
-}
-
-// ============================================================
-//  测试用例 6: 直接构造 IR 测试 CodeGenerator
-// ============================================================
-void testCodeGenerator() {
-    printSeparator("Test 6: CodeGenerator - Assembly Output");
-
-    IRProgram program;
-    program.globalVariables.push_back("a");
-    program.globalVariables.push_back("b");
-    program.globalVariables.push_back("c");
-
-    auto func = program.createFunction("main");
-    auto entry = func->createBlock("entry");
-    func->entry = entry;
-
-    // a = 3 + 4 * 2;
-    entry->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::CONST, "%t1", std::vector<std::string>{"3"}));
-    entry->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::CONST, "%t2", std::vector<std::string>{"4"}));
-    entry->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::CONST, "%t3", std::vector<std::string>{"2"}));
-    entry->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::MUL, "%t4", std::vector<std::string>{"%t2", "%t3"}));
-    entry->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::ADD, "%t5", std::vector<std::string>{"%t1", "%t4"}));
-    entry->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::STORE, "a", std::vector<std::string>{"%t5"}));
-
-    // if (a > 5) { b = 1; }
-    auto thenBlock = func->createBlock("then");
-    auto mergeBlock = func->createBlock("merge");
-
-    entry->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::LOAD, "%t6", std::vector<std::string>{"a"}));
-    entry->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::CONST, "%t7", std::vector<std::string>{"5"}));
-    entry->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::CMP_GT, "%t8", std::vector<std::string>{"%t6", "%t7"}));
-    entry->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::BRANCH_EQ, "", std::vector<std::string>{"%t8", "1", thenBlock->name}));
-    entry->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::BRANCH, "", std::vector<std::string>{mergeBlock->name}));
-
-    thenBlock->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::CONST, "%t9", std::vector<std::string>{"1"}));
-    thenBlock->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::STORE, "b", std::vector<std::string>{"%t9"}));
-    thenBlock->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::BRANCH, "", std::vector<std::string>{mergeBlock->name}));
-
-    mergeBlock->addInstruction(std::make_unique<IRInstruction>(
-        IROpcode::RET, "", std::vector<std::string>{"0"}));
-
-    // 生成汇编
-    {
-        CodeGenerator codegen("output_test.s");
-        codegen.generate(program);
-    }
-
-    // 读取并打印生成的汇编
-    std::ifstream inFile("output_test.s");
-    if (inFile.is_open()) {
-        std::string line;
-        std::cout << "=== Generated Assembly ===\n";
-        while (std::getline(inFile, line)) {
-            std::cout << "  " << line << "\n";
+// ========== 主编译函数 ==========
+int compile(const CompilerOptions& options) {
+    try {
+        // ========== Step 1: 词法分析 ==========
+        if (options.verbose) printSeparator("Step 1: Lexer (词法分析)");
+        
+        Lexer lexer(options.inputFile);
+        
+        if (options.verbose) {
+            std::vector<Token> tokens = lexer.tokenize();
+            printTokenList(tokens);
+            std::cout << "✅ 词法分析完成\n";
         }
-        inFile.close();
-    }
-
-    std::cout << "\n[PASS] CodeGenerator output written to output_test.s\n";
-}
-
-// ============================================================
-//  测试用例 7: 完整编译流程
-//  从 AST → IR → 优化 → 汇编
-// ============================================================
-void testFullPipeline() {
-    printSeparator("Test 7: Full Pipeline AST -> IR -> Optimize -> Assembly");
-
-    // 构造: while (c < 20) { c = c + 1; }
-    auto whileIdent = std::make_unique<IdentifierNode>("c", 1, 1);
-    auto whileNum   = std::make_unique<NumberNode>(20, 1, 1);
-    auto whileCond  = std::make_unique<BinaryOpNode>("<", std::move(whileIdent), std::move(whileNum), 1, 1);
-
-    auto bodyIdent  = std::make_unique<IdentifierNode>("c", 2, 1);
-    auto bodyNum1   = std::make_unique<NumberNode>(1, 2, 1);
-    auto bodyAdd    = std::make_unique<BinaryOpNode>("+", std::move(bodyIdent), std::move(bodyNum1), 2, 1);
-    auto bodyAssign = std::make_unique<AssignmentNode>("c", std::move(bodyAdd), 2, 1);
-
-    auto bodyBlock  = std::make_unique<BlockNode>(2, 1);
-    bodyBlock->statements.push_back(std::move(bodyAssign));
-
-    auto whileStmt  = std::make_unique<WhileStatementNode>(
-        std::move(whileCond), std::move(bodyBlock), 1, 1);
-
-    // 变量声明 int c;
-    auto decl = std::make_unique<DeclarationNode>("int", "c", nullptr, 1, 1);
-
-    auto declBlock = std::make_unique<BlockNode>(1, 1);
-    declBlock->statements.push_back(std::move(decl));
-    declBlock->statements.push_back(std::move(whileStmt));
-
-    auto func = std::make_unique<FunctionDefinitionNode>(
-        "main", "int", std::vector<std::pair<std::string, std::string>>{},
-        std::move(declBlock), 1, 1);
-
-    auto program = std::make_unique<ProgramNode>();
-    program->functions.push_back(std::move(func));
-
-    // Step 1: IR 生成
-    std::cout << "--- Step 1: IR Generation ---\n";
-    IRGenerator irGen;
-    IRProgram ir = irGen.generate(program.get());
-    printIR(ir);
-
-    // Step 2: 优化
-    std::cout << "\n--- Step 2: Optimization ---\n";
-    Optimizer opt;
-    opt.optimize(ir);
-    printIR(ir);
-
-    // Step 3: 代码生成
-    std::cout << "\n--- Step 3: Code Generation ---\n";
-    CodeGenerator codeGen("output_pipeline.s");
-    codeGen.generate(ir);
-
-    std::ifstream inFile("output_pipeline.s");
-    if (inFile.is_open()) {
-        std::string line;
-        while (std::getline(inFile, line)) {
-            std::cout << "  " << line << "\n";
+        
+        // ========== Step 2: 语法分析 ==========
+        if (options.verbose) printSeparator("Step 2: Parser (语法分析)");
+        
+        Lexer lexer2(options.inputFile);
+        Parser parser(lexer2);
+        ASTNodePtr ast = parser.parse();
+        
+        if (options.verbose) {
+            std::cout << "AST 结构:\n";
+            printAST(ast.get());
+            std::cout << "\n✅ 语法分析完成\n";
         }
-        inFile.close();
+        
+        // ========== Step 3: 语义分析 ==========
+        if (options.verbose) printSeparator("Step 3: Semantic (语义分析)");
+        
+        SemanticAnalyzer semantic;
+        semantic.analyze(ast.get());
+        
+        if (options.verbose) {
+            printSymbolTable(semantic.getSymbolTable());
+            std::cout << "✅ 语义分析完成\n";
+        }
+        
+        // ========== Step 4: 中间代码生成 ==========
+        if (options.verbose) printSeparator("Step 4: IR Generation (中间代码生成)");
+        
+        IRGenerator irGen;
+        IRProgram ir = irGen.generate(ast.get());
+        
+        if (options.verbose) {
+            printIR(ir);
+            std::cout << "\n✅ 中间代码生成完成\n";
+        }
+        
+        // ========== Step 5: 优化 ==========
+        if (options.optimize) {
+            if (options.verbose) printSeparator("Step 5: Optimization (代码优化)");
+            
+            Optimizer optimizer;
+            optimizer.optimize(ir);
+            
+            if (options.verbose) {
+                std::cout << "优化后的中间代码:\n";
+                printIR(ir);
+                std::cout << "\n✅ 代码优化完成\n";
+            }
+        }
+        
+        // ========== Step 6: 代码生成 ==========
+        if (options.verbose) printSeparator("Step 6: Code Generation (代码生成)");
+        
+        CodeGenerator codeGen(options.outputFile);
+        codeGen.generate(ir);
+        
+        if (options.verbose) {
+            std::cout << "✅ 汇编代码已写入: " << options.outputFile << "\n";
+            
+            // 读取并显示生成的汇编代码
+            std::ifstream inFile(options.outputFile);
+            if (inFile.is_open()) {
+                std::cout << "\n生成的汇编代码:\n";
+                std::string line;
+                while (std::getline(inFile, line)) {
+                    std::cout << "  " << line << "\n";
+                }
+                inFile.close();
+            }
+        }
+        
+        // ========== 完成 ==========
+        if (options.verbose) {
+            printSeparator("编译完成");
+        }
+        std::cout << "✅ 编译成功: " << options.inputFile << " → " << options.outputFile << "\n";
+        
+        return 0;
+        
+    } catch (const std::exception& e) {
+        std::cerr << "\n❌ 编译错误: " << e.what() << "\n";
+        return 1;
     }
-
-    std::cout << "\n[PASS] Full pipeline test passed\n";
 }
 
-// ============================================================
-//  主函数
-// ============================================================
-int main() {
-    std::cout << "========================================\n";
-    std::cout << "  TinyC Compiler - Backend Test Suite\n";
-    std::cout << "========================================\n";
-
-    // 由于各测试需要分别编译，这里用条件编译
-    // 实际运行时取消对应 #define 的注释
+// ========== 主函数 ==========
+int main(int argc, char* argv[]) {
+    // 解析命令行参数
+    CompilerOptions options;
     
-    // #define RUN_TEST_1
-    // #define RUN_TEST_2
-    // #define RUN_TEST_3
-    // #define RUN_TEST_4
-    // #define RUN_TEST_5
-    // #define RUN_TEST_6
-    // #define RUN_TEST_7
-
-    // 为方便一次性运行，直接全部执行
-    // 注意：如果 Parser 未完成，请使用手动构造的 AST
-
-    testArithmeticExpression();
-    testIfWithRelational();
-    testWhileLoop();
-
-    // Optimizer 测试
-    testConstantFolding();
-    testDeadCodeElimination();
-
-    // CodeGenerator 测试
-    testCodeGenerator();
-
-    // 完整流水线
-    testFullPipeline();
-
-    printSeparator("All Tests Passed");
-    std::cout << "All backend tests passed!\n\n";
-
-    return 0;
+    if (argc < 2) {
+        printUsage(argv[0]);
+        return 1;
+    }
+    
+    options.inputFile = argv[1];
+    
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+            options.outputFile = argv[++i];
+        } else if (strcmp(argv[i], "-v") == 0) {
+            options.verbose = true;
+        } else if (strcmp(argv[i], "-O") == 0) {
+            options.optimize = true;
+        } else {
+            std::cerr << "未知选项: " << argv[i] << "\n";
+            printUsage(argv[0]);
+            return 1;
+        }
+    }
+    
+    // 执行编译
+    return compile(options);
 }
