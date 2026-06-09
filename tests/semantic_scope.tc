@@ -1,0 +1,6 @@
+int result = 0;
+{
+    int local = 3;
+    result = local;
+}
+result = local;

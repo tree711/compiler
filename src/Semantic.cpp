@@ -1,210 +1,221 @@
-#include "../include/AST.h"
-#include "../include/Symbol.h"
+#include "../include/Semantic.h"
+
 #include <stdexcept>
+#include <string>
 
-class SemanticAnalyzer {
+namespace {
+
+std::string location(int line, int column) {
+    return " at line " + std::to_string(line) +
+           ", column " + std::to_string(column);
+}
+
+class ScopeGuard {
 private:
-    SymbolTable symbolTable;
-
-    void visitProgramNode(ProgramNode* node);
-    void visitDeclarationNode(DeclarationNode* node);
-    void visitFunctionDefinitionNode(FunctionDefinitionNode* node);
-    void visitStatementNode(ASTNode* node);
-    void visitExpressionNode(ASTNode* node);
-    SymbolType visitExpressionAndGetType(ASTNode* node);
+    SymbolTable& table;
 
 public:
-    void analyze(ASTNode* root) {
-        if (!root) return;
-        visitProgramNode(dynamic_cast<ProgramNode*>(root));
+    explicit ScopeGuard(SymbolTable& table) : table(table) {
+        table.enterScope();
+    }
+
+    ~ScopeGuard() {
+        table.exitScope();
     }
 };
 
-void SemanticAnalyzer::visitProgramNode(ProgramNode* node) {
-    for (auto& decl : node->declarations) {
-        visitDeclarationNode(dynamic_cast<DeclarationNode*>(decl.get()));
+}  // 匿名命名空间
+
+SymbolTable::SymbolTable() : scopes(1) {}
+
+void SymbolTable::enterScope() {
+    scopes.emplace_back();
+}
+
+void SymbolTable::exitScope() {
+    if (scopes.size() <= 1) {
+        throw std::logic_error("Cannot exit global scope");
     }
-    for (auto& func : node->functions) {
-        visitFunctionDefinitionNode(dynamic_cast<FunctionDefinitionNode*>(func.get()));
+    scopes.pop_back();
+}
+
+bool SymbolTable::declare(
+    const std::string& name, SymbolType type, int line, int column) {
+    // 后端目前直接使用源代码变量名生成汇编符号。
+    // 若允许同名变量遮蔽，不同声明会被映射到同一个汇编符号。
+    if (lookup(name)) {
+        return false;
+    }
+
+    const int scope = currentScope();
+    scopes.back().emplace(
+        name, Symbol{name, type, scope, line, column});
+    return true;
+}
+
+const Symbol* SymbolTable::lookup(const std::string& name) const {
+    for (auto scope = scopes.rbegin(); scope != scopes.rend(); ++scope) {
+        const auto symbol = scope->find(name);
+        if (symbol != scope->end()) {
+            return &symbol->second;
+        }
+    }
+    return nullptr;
+}
+
+bool SymbolTable::existsInCurrentScope(const std::string& name) const {
+    return scopes.back().find(name) != scopes.back().end();
+}
+
+int SymbolTable::currentScope() const {
+    return static_cast<int>(scopes.size()) - 1;
+}
+
+void SemanticAnalyzer::analyze(ASTNode* root) {
+    auto* program = dynamic_cast<ProgramNode*>(root);
+    if (!program) {
+        throw std::runtime_error("Semantic analysis requires a ProgramNode");
+    }
+    visitProgram(program);
+}
+
+void SemanticAnalyzer::visitProgram(ProgramNode* node) {
+    for (auto& declaration : node->declarations) {
+        auto* declarationNode =
+            dynamic_cast<DeclarationNode*>(declaration.get());
+        if (!declarationNode) {
+            throw std::runtime_error(
+                "Program declaration list contains a non-declaration node");
+        }
+        visitDeclaration(declarationNode);
+    }
+
+    for (auto& statement : node->statements) {
+        visitStatement(statement.get());
     }
 }
 
-void SemanticAnalyzer::visitDeclarationNode(DeclarationNode* node) {
-    SymbolType type;
-    if (node->type == "int") type = SymbolType::INTEGER;
-    else if (node->type == "float") type = SymbolType::FLOAT;
-    else if (node->type == "void") type = SymbolType::VOID;
-    else throw std::runtime_error("Unknown type: " + node->type);
-
-    if (symbolTable.existsInCurrentScope(node->name)) {
-        throw std::runtime_error("Variable " + node->name + " already declared in this scope");
+void SemanticAnalyzer::visitDeclaration(DeclarationNode* node) {
+    if (node->type != "int") {
+        throw std::runtime_error(
+            "Unsupported type '" + node->type + "'" +
+            location(node->line, node->column));
     }
-
-    Symbol* symbol = new Symbol(node->name, type, symbolTable.getCurrentScope(), node->line);
-    symbolTable.insert(symbol);
 
     if (node->initializer) {
-        SymbolType exprType = visitExpressionAndGetType(node->initializer.get());
-        if (type != exprType) {
-            throw std::runtime_error("Type mismatch in declaration");
-        }
+        visitExpression(node->initializer.get());
+    }
+
+    if (!symbolTable.declare(
+            node->name, SymbolType::INTEGER, node->line, node->column)) {
+        throw std::runtime_error(
+            "Variable '" + node->name + "' is already declared" +
+            location(node->line, node->column));
     }
 }
 
-void SemanticAnalyzer::visitFunctionDefinitionNode(FunctionDefinitionNode* node) {
-    SymbolType returnType;
-    if (node->returnType == "int") returnType = SymbolType::INTEGER;
-    else if (node->returnType == "float") returnType = SymbolType::FLOAT;
-    else if (node->returnType == "void") returnType = SymbolType::VOID;
-    else throw std::runtime_error("Unknown return type: " + node->returnType);
-
-    std::vector<SymbolType> paramTypes;
-    for (auto& param : node->parameters) {
-        if (param.second == "int") paramTypes.push_back(SymbolType::INTEGER);
-        else if (param.second == "float") paramTypes.push_back(SymbolType::FLOAT);
-        else throw std::runtime_error("Unknown parameter type: " + param.second);
+void SemanticAnalyzer::visitStatement(ASTNode* node) {
+    if (!node) {
+        return;
     }
-
-    FunctionSymbol* funcSymbol = new FunctionSymbol(node->name, returnType, paramTypes, 
-                                                    symbolTable.getCurrentScope(), node->line);
-    symbolTable.insert(funcSymbol);
-
-    symbolTable.enterScope();
-
-    for (auto& param : node->parameters) {
-        SymbolType paramType;
-        if (param.second == "int") paramType = SymbolType::INTEGER;
-        else paramType = SymbolType::FLOAT;
-        Symbol* paramSymbol = new Symbol(param.first, paramType, symbolTable.getCurrentScope(), node->line);
-        symbolTable.insert(paramSymbol);
-    }
-
-    visitStatementNode(node->body.get());
-
-    symbolTable.exitScope();
-}
-
-void SemanticAnalyzer::visitStatementNode(ASTNode* node) {
-    if (!node) return;
 
     switch (node->type) {
+        case ASTNodeType::DECLARATION:
+            visitDeclaration(dynamic_cast<DeclarationNode*>(node));
+            return;
+        case ASTNodeType::ASSIGNMENT:
+            visitExpression(node);
+            return;
         case ASTNodeType::BLOCK: {
-            symbolTable.enterScope();
-            auto block = dynamic_cast<BlockNode*>(node);
-            for (auto& stmt : block->statements) {
-                visitStatementNode(stmt.get());
+            ScopeGuard scope(symbolTable);
+            auto* block = dynamic_cast<BlockNode*>(node);
+            for (auto& statement : block->statements) {
+                visitStatement(statement.get());
             }
-            symbolTable.exitScope();
-            break;
+            return;
         }
         case ASTNodeType::IF_STATEMENT: {
-            auto ifStmt = dynamic_cast<IfStatementNode*>(node);
-            visitExpressionNode(ifStmt->condition.get());
-            visitStatementNode(ifStmt->thenBranch.get());
-            if (ifStmt->elseBranch) {
-                visitStatementNode(ifStmt->elseBranch.get());
-            }
-            break;
+            auto* ifStatement = dynamic_cast<IfStatementNode*>(node);
+            visitExpression(ifStatement->condition.get());
+            visitStatement(ifStatement->thenBranch.get());
+            visitStatement(ifStatement->elseBranch.get());
+            return;
         }
         case ASTNodeType::WHILE_STATEMENT: {
-            auto whileStmt = dynamic_cast<WhileStatementNode*>(node);
-            visitExpressionNode(whileStmt->condition.get());
-            visitStatementNode(whileStmt->body.get());
-            break;
+            auto* whileStatement = dynamic_cast<WhileStatementNode*>(node);
+            visitExpression(whileStatement->condition.get());
+            visitStatement(whileStatement->body.get());
+            return;
         }
-        case ASTNodeType::FOR_STATEMENT: {
-            auto forStmt = dynamic_cast<ForStatementNode*>(node);
-            if (forStmt->init) visitStatementNode(forStmt->init.get());
-            if (forStmt->condition) visitExpressionNode(forStmt->condition.get());
-            if (forStmt->increment) visitExpressionNode(forStmt->increment.get());
-            visitStatementNode(forStmt->body.get());
-            break;
-        }
-        case ASTNodeType::RETURN_STATEMENT: {
-            auto returnStmt = dynamic_cast<ReturnStatementNode*>(node);
-            if (returnStmt->value) {
-                visitExpressionNode(returnStmt->value.get());
-            }
-            break;
+        case ASTNodeType::BINARY_OP:
+        case ASTNodeType::UNARY_OP:
+        case ASTNodeType::IDENTIFIER:
+        case ASTNodeType::NUMBER:
+            visitExpression(node);
+            return;
+        case ASTNodeType::PROGRAM:
+            throw std::runtime_error("Nested ProgramNode is not valid");
+    }
+
+    throw std::runtime_error("Unsupported statement node");
+}
+
+SymbolType SemanticAnalyzer::visitExpression(ASTNode* node) {
+    if (!node) {
+        throw std::runtime_error("Missing expression");
+    }
+
+    switch (node->type) {
+        case ASTNodeType::NUMBER:
+            return SymbolType::INTEGER;
+        case ASTNodeType::IDENTIFIER: {
+            auto* identifier = dynamic_cast<IdentifierNode*>(node);
+            requireDeclared(
+                identifier->name, identifier->line, identifier->column);
+            return SymbolType::INTEGER;
         }
         case ASTNodeType::ASSIGNMENT: {
-            auto assign = dynamic_cast<AssignmentNode*>(node);
-            Symbol* symbol = symbolTable.lookup(assign->name);
-            if (!symbol) {
-                throw std::runtime_error("Undefined variable: " + assign->name);
-            }
-            visitExpressionNode(assign->value.get());
-            break;
+            auto* assignment = dynamic_cast<AssignmentNode*>(node);
+            requireDeclared(
+                assignment->name, assignment->line, assignment->column);
+            visitExpression(assignment->value.get());
+            return SymbolType::INTEGER;
         }
-        case ASTNodeType::DECLARATION: {
-            visitDeclarationNode(dynamic_cast<DeclarationNode*>(node));
-            break;
+        case ASTNodeType::UNARY_OP: {
+            auto* unary = dynamic_cast<UnaryOpNode*>(node);
+            if (unary->op != "-") {
+                throw std::runtime_error(
+                    "Unsupported unary operator '" + unary->op + "'" +
+                    location(unary->line, unary->column));
+            }
+            visitExpression(unary->operand.get());
+            return SymbolType::INTEGER;
+        }
+        case ASTNodeType::BINARY_OP: {
+            auto* binary = dynamic_cast<BinaryOpNode*>(node);
+            const std::string& op = binary->op;
+            if (op != "+" && op != "-" && op != "*" && op != "/" &&
+                op != "==" && op != "<" && op != ">") {
+                throw std::runtime_error(
+                    "Unsupported binary operator '" + op + "'" +
+                    location(binary->line, binary->column));
+            }
+            visitExpression(binary->left.get());
+            visitExpression(binary->right.get());
+            return SymbolType::INTEGER;
         }
         default:
-            visitExpressionNode(node);
+            throw std::runtime_error(
+                "Node is not a valid expression" +
+                location(node->line, node->column));
     }
 }
 
-void SemanticAnalyzer::visitExpressionNode(ASTNode* node) {
-    if (!node) return;
-
-    switch (node->type) {
-        case ASTNodeType::BINARY_OP: {
-            auto binOp = dynamic_cast<BinaryOpNode*>(node);
-            visitExpressionNode(binOp->left.get());
-            visitExpressionNode(binOp->right.get());
-            break;
-        }
-        case ASTNodeType::UNARY_OP: {
-            auto unOp = dynamic_cast<UnaryOpNode*>(node);
-            visitExpressionNode(unOp->operand.get());
-            break;
-        }
-        case ASTNodeType::IDENTIFIER: {
-            auto ident = dynamic_cast<IdentifierNode*>(node);
-            Symbol* symbol = symbolTable.lookup(ident->name);
-            if (!symbol) {
-                throw std::runtime_error("Undefined variable: " + ident->name);
-            }
-            break;
-        }
-        case ASTNodeType::NUMBER:
-            break;
-        default:
-            break;
-    }
-}
-
-SymbolType SemanticAnalyzer::visitExpressionAndGetType(ASTNode* node) {
-    if (!node) return SymbolType::VOID;
-
-    switch (node->type) {
-        case ASTNodeType::IDENTIFIER: {
-            auto ident = dynamic_cast<IdentifierNode*>(node);
-            Symbol* symbol = symbolTable.lookup(ident->name);
-            if (!symbol) {
-                throw std::runtime_error("Undefined variable: " + ident->name);
-            }
-            return symbol->type;
-        }
-        case ASTNodeType::NUMBER: {
-            auto num = dynamic_cast<NumberNode*>(node);
-            return num->isFloat ? SymbolType::FLOAT : SymbolType::INTEGER;
-        }
-        case ASTNodeType::BINARY_OP: {
-            auto binOp = dynamic_cast<BinaryOpNode*>(node);
-            SymbolType leftType = visitExpressionAndGetType(binOp->left.get());
-            SymbolType rightType = visitExpressionAndGetType(binOp->right.get());
-            if (leftType != rightType) {
-                throw std::runtime_error("Type mismatch in binary operation");
-            }
-            return leftType;
-        }
-        case ASTNodeType::UNARY_OP: {
-            auto unOp = dynamic_cast<UnaryOpNode*>(node);
-            return visitExpressionAndGetType(unOp->operand.get());
-        }
-        default:
-            return SymbolType::VOID;
+void SemanticAnalyzer::requireDeclared(
+    const std::string& name, int line, int column) const {
+    if (!symbolTable.lookup(name)) {
+        throw std::runtime_error(
+            "Variable '" + name + "' is not declared" +
+            location(line, column));
     }
 }

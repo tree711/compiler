@@ -22,32 +22,24 @@ std::string IRGenerator::newLabel(const std::string& prefix) {
 }
 
 IRProgram IRGenerator::generate(ASTNode* root) {
-    if (auto programNode = dynamic_cast<ProgramNode*>(root)) {
-        for (auto& func : programNode->functions) {
-            generateFunctionDefinition(dynamic_cast<FunctionDefinitionNode*>(func.get()));
-        }
+    auto* programNode = dynamic_cast<ProgramNode*>(root);
+    if (!programNode) {
+        return std::move(program);
     }
-    return std::move(program);
-}
 
-void IRGenerator::generateFunctionDefinition(FunctionDefinitionNode* node) {
-    currentFunction = program.createFunction(node->name);
+    currentFunction = program.createFunction("main");
     currentBlock = currentFunction->createBlock("entry");
     currentFunction->entry = currentBlock;
 
-    std::vector<std::string> params;
-    for (size_t i = 0; i < node->parameters.size(); i++) {
-        std::stringstream ss;
-        ss << "%p" << i;
-        params.push_back(ss.str());
+    for (auto& declaration : programNode->declarations) {
+        generateStatement(declaration.get());
     }
-    currentFunction->parameters = params;
-
-    if (auto block = dynamic_cast<BlockNode*>(node->body.get())) {
-        for (auto& stmt : block->statements) {
-            generateStatement(stmt.get());
-        }
+    for (auto& statement : programNode->statements) {
+        generateStatement(statement.get());
     }
+    currentBlock->addInstruction(std::make_unique<IRInstruction>(
+        IROpcode::RET, "", std::vector<std::string>{"0"}));
+    return std::move(program);
 }
 
 void IRGenerator::generateStatement(ASTNode* node) {
@@ -69,7 +61,7 @@ void IRGenerator::generateStatement(ASTNode* node) {
             BasicBlock* elseBlock = currentFunction->createBlock(newLabel("else"));
             BasicBlock* mergeBlock = currentFunction->createBlock(newLabel("merge"));
 
-            // if cond == 1 (true), jump to thenBlock; else fall through to elseBlock
+            // 条件为 1 时进入真分支，否则进入假分支
             currentBlock->addInstruction(std::make_unique<IRInstruction>(
                 IROpcode::BRANCH_EQ, "", std::vector<std::string>{cond, "1", thenBlock->name}));
             currentBlock->addInstruction(std::make_unique<IRInstruction>(
@@ -101,7 +93,7 @@ void IRGenerator::generateStatement(ASTNode* node) {
 
             currentBlock = condBlock;
             std::string cond = generateExpression(whileStmt->condition.get());
-            // if cond == 1 (true), jump to body; else fall through to exit
+            // 条件为 1 时进入循环体，否则退出循环
             currentBlock->addInstruction(std::make_unique<IRInstruction>(
                 IROpcode::BRANCH_EQ, "", std::vector<std::string>{cond, "1", bodyBlock->name}));
             currentBlock->addInstruction(std::make_unique<IRInstruction>(
@@ -113,18 +105,6 @@ void IRGenerator::generateStatement(ASTNode* node) {
                 IROpcode::BRANCH, "", std::vector<std::string>{condBlock->name}));
 
             currentBlock = exitBlock;
-            break;
-        }
-        case ASTNodeType::RETURN_STATEMENT: {
-            auto returnStmt = dynamic_cast<ReturnStatementNode*>(node);
-            if (returnStmt->value) {
-                std::string value = generateExpression(returnStmt->value.get());
-                currentBlock->addInstruction(std::make_unique<IRInstruction>(
-                    IROpcode::RET, "", std::vector<std::string>{value}));
-            } else {
-                currentBlock->addInstruction(std::make_unique<IRInstruction>(
-                    IROpcode::RET, "", std::vector<std::string>{}));
-            }
             break;
         }
         case ASTNodeType::BLOCK: {
@@ -163,11 +143,9 @@ std::string IRGenerator::generateExpression(ASTNode* node) {
         case ASTNodeType::NUMBER: {
             auto num = dynamic_cast<NumberNode*>(node);
             std::string temp = newTemp();
-            std::string value = num->isFloat ? 
-                std::to_string(std::get<double>(num->value)) : 
-                std::to_string(std::get<int>(num->value));
             currentBlock->addInstruction(std::make_unique<IRInstruction>(
-                IROpcode::CONST, temp, std::vector<std::string>{value}));
+                IROpcode::CONST, temp,
+                std::vector<std::string>{std::to_string(num->value)}));
             return temp;
         }
         case ASTNodeType::BINARY_OP: {

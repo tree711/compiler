@@ -1,180 +1,119 @@
-#include "../include/Token.h"
-#include <fstream>
+#include "../include/Lexer.h"
+
 #include <cctype>
+#include <stdexcept>
 
-class Lexer {
-private:
-    std::ifstream file;
-    char currentChar;
-    int line;
-    int column;
-
-    void advance() {
-        file.get(currentChar);
-        if (currentChar == '\n') {
-            line++;
-            column = 1;
-        } else {
-            column++;
-        }
+void Lexer::advance() {
+    file.get(currentChar);
+    if (currentChar == '\n') {
+        ++line;
+        column = 1;
+    } else {
+        ++column;
     }
+}
 
-    char peek() {
-        char c = file.peek();
-        return c;
-    }
+bool Lexer::isEOF() {
+    return file.eof();
+}
 
-    bool isEOF() {
-        return file.eof();
-    }
+TokenType Lexer::checkKeyword(const std::string& word) {
+    if (word == "if") return TokenType::IF;
+    if (word == "else") return TokenType::ELSE;
+    if (word == "while") return TokenType::WHILE;
+    if (word == "int") return TokenType::INT;
+    return TokenType::IDENTIFIER;
+}
 
-    TokenType checkKeyword(const std::string& word) {
-        if (word == "if") return TokenType::IF;
-        if (word == "else") return TokenType::ELSE;
-        if (word == "while") return TokenType::WHILE;
-        if (word == "for") return TokenType::FOR;
-        if (word == "return") return TokenType::RETURN;
-        if (word == "int") return TokenType::INT;
-        if (word == "float") return TokenType::FLOAT_TYPE;
-        if (word == "void") return TokenType::VOID;
-        return TokenType::IDENTIFIER;
-    }
-
-    Token scanIdentifier() {
-        std::string value;
-        while (isalnum(currentChar) || currentChar == '_') {
-            value += currentChar;
-            advance();
-        }
-        TokenType type = checkKeyword(value);
-        return Token(type, value, line, column);
-    }
-
-    Token scanNumber() {
-        std::string value;
-        bool isFloat = false;
-        
-        while (isdigit(currentChar)) {
-            value += currentChar;
-            advance();
-        }
-        
-        if (currentChar == '.') {
-            isFloat = true;
-            value += currentChar;
-            advance();
-            while (isdigit(currentChar)) {
-                value += currentChar;
-                advance();
-            }
-        }
-        
-        if (isFloat) {
-            return Token(TokenType::FLOAT, value, line, column);
-        }
-        return Token(TokenType::INTEGER, value, line, column);
-    }
-
-    Token scanString() {
-        std::string value;
-        advance();
-        while (currentChar != '"' && !isEOF()) {
-            if (currentChar == '\\') {
-                advance();
-                if (currentChar == 'n') value += '\n';
-                else if (currentChar == 't') value += '\t';
-                else value += currentChar;
-            } else {
-                value += currentChar;
-            }
-            advance();
-        }
-        advance();
-        return Token(TokenType::STRING, value, line, column);
-    }
-
-public:
-    Lexer(const std::string& filename) : line(1), column(1) {
-        file.open(filename);
-        if (!file.is_open()) {
-            throw std::runtime_error("Cannot open file: " + filename);
-        }
+Token Lexer::scanIdentifier() {
+    const int startLine = line;
+    const int startColumn = column;
+    std::string value;
+    while (!isEOF() &&
+           (std::isalnum(static_cast<unsigned char>(currentChar)) ||
+            currentChar == '_')) {
+        value += currentChar;
         advance();
     }
+    return Token(checkKeyword(value), value, startLine, startColumn);
+}
 
-    ~Lexer() {
-        file.close();
-    }
-
-    Token getNextToken() {
-        while (!isEOF() && isspace(currentChar)) {
-            advance();
-        }
-
-        if (isEOF()) {
-            return Token(TokenType::END_OF_FILE, "", line, column);
-        }
-
-        if (isalpha(currentChar) || currentChar == '_') {
-            return scanIdentifier();
-        }
-
-        if (isdigit(currentChar)) {
-            return scanNumber();
-        }
-
-        if (currentChar == '"') {
-            return scanString();
-        }
-
-        char c = currentChar;
+Token Lexer::scanNumber() {
+    const int startLine = line;
+    const int startColumn = column;
+    std::string value;
+    while (!isEOF() && std::isdigit(static_cast<unsigned char>(currentChar))) {
+        value += currentChar;
         advance();
+    }
+    return Token(TokenType::INTEGER, value, startLine, startColumn);
+}
 
-        switch (c) {
-            case '+': return Token(TokenType::PLUS, "+", line, column);
-            case '-': return Token(TokenType::MINUS, "-", line, column);
-            case '*': return Token(TokenType::MULTIPLY, "*", line, column);
-            case '/': return Token(TokenType::DIVIDE, "/", line, column);
-            case '=': {
-                if (currentChar == '=') {
-                    advance();
-                    return Token(TokenType::EQUAL, "==", line, column);
-                }
-                return Token(TokenType::ASSIGN, "=", line, column);
-            }
-            case '!': {
-                if (currentChar == '=') {
-                    advance();
-                    return Token(TokenType::NOT_EQUAL, "!=", line, column);
-                }
-                break;
-            }
-            case '<': {
-                if (currentChar == '=') {
-                    advance();
-                    return Token(TokenType::LESS_EQUAL, "<=", line, column);
-                }
-                return Token(TokenType::LESS, "<", line, column);
-            }
-            case '>': {
-                if (currentChar == '=') {
-                    advance();
-                    return Token(TokenType::GREATER_EQUAL, ">=", line, column);
-                }
-                return Token(TokenType::GREATER, ">", line, column);
-            }
-            case ';': return Token(TokenType::SEMICOLON, ";", line, column);
-            case ',': return Token(TokenType::COMMA, ",", line, column);
-            case '(': return Token(TokenType::LPAREN, "(", line, column);
-            case ')': return Token(TokenType::RPAREN, ")", line, column);
-            case '{': return Token(TokenType::LBRACE, "{", line, column);
-            case '}': return Token(TokenType::RBRACE, "}", line, column);
-            case '[': return Token(TokenType::LBRACKET, "[", line, column);
-            case ']': return Token(TokenType::RBRACKET, "]", line, column);
-            default:
-                throw std::runtime_error("Unexpected character: " + std::string(1, c));
-        }
+Lexer::Lexer(const std::string& filename)
+    : currentChar('\0'), line(1), column(0) {
+    file.open(filename);
+    if (!file.is_open()) {
+        throw std::runtime_error("Cannot open file: " + filename);
+    }
+    advance();
+}
 
+Lexer::~Lexer() {
+    file.close();
+}
+
+Token Lexer::getNextToken() {
+    while (!isEOF() && std::isspace(static_cast<unsigned char>(currentChar))) {
+        advance();
+    }
+    if (isEOF()) {
         return Token(TokenType::END_OF_FILE, "", line, column);
     }
-};
+    if (std::isalpha(static_cast<unsigned char>(currentChar)) ||
+        currentChar == '_') {
+        return scanIdentifier();
+    }
+    if (std::isdigit(static_cast<unsigned char>(currentChar))) {
+        return scanNumber();
+    }
+
+    const int tokenLine = line;
+    const int tokenColumn = column;
+    const char c = currentChar;
+    advance();
+    switch (c) {
+        case '+': return Token(TokenType::PLUS, "+", tokenLine, tokenColumn);
+        case '-': return Token(TokenType::MINUS, "-", tokenLine, tokenColumn);
+        case '*': return Token(TokenType::MULTIPLY, "*", tokenLine, tokenColumn);
+        case '/': return Token(TokenType::DIVIDE, "/", tokenLine, tokenColumn);
+        case '=':
+            if (currentChar == '=') {
+                advance();
+                return Token(TokenType::EQUAL, "==", tokenLine, tokenColumn);
+            }
+            return Token(TokenType::ASSIGN, "=", tokenLine, tokenColumn);
+        case '<': return Token(TokenType::LESS, "<", tokenLine, tokenColumn);
+        case '>': return Token(TokenType::GREATER, ">", tokenLine, tokenColumn);
+        case ';': return Token(TokenType::SEMICOLON, ";", tokenLine, tokenColumn);
+        case ',': return Token(TokenType::COMMA, ",", tokenLine, tokenColumn);
+        case '(': return Token(TokenType::LPAREN, "(", tokenLine, tokenColumn);
+        case ')': return Token(TokenType::RPAREN, ")", tokenLine, tokenColumn);
+        case '{': return Token(TokenType::LBRACE, "{", tokenLine, tokenColumn);
+        case '}': return Token(TokenType::RBRACE, "}", tokenLine, tokenColumn);
+        default:
+            throw std::runtime_error(
+                "Unexpected character '" + std::string(1, c) +
+                "' at line " + std::to_string(tokenLine) +
+                ", column " + std::to_string(tokenColumn));
+    }
+}
+
+std::vector<Token> Lexer::tokenize() {
+    std::vector<Token> tokens;
+    for (Token token = getNextToken();
+         token.type != TokenType::END_OF_FILE;
+         token = getNextToken()) {
+        tokens.push_back(token);
+    }
+    return tokens;
+}
