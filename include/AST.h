@@ -66,11 +66,11 @@ public:
 
 class AssignmentNode : public ASTNode {
 public:
-    std::string name;
-    ASTNodePtr value;
+    ASTNodePtr left;
+    ASTNodePtr right;
 
-    AssignmentNode(const std::string& n, ASTNodePtr v, int line, int col)
-        : ASTNode(ASTNodeType::ASSIGNMENT, line, col), name(n), value(std::move(v)) {}
+    AssignmentNode(ASTNodePtr l, ASTNodePtr r, int line, int col)
+        : ASTNode(ASTNodeType::ASSIGNMENT, line, col), left(std::move(l)), right(std::move(r)) {}
 };
 
 class BlockNode : public ASTNode {
@@ -108,26 +108,19 @@ public:
 class DeclarationNode : public ASTNode {
 public:
     std::string type;
-    std::string name;
-    ASTNodePtr initializer;
+    std::vector<std::unique_ptr<IdentifierNode>> variables;
 
-    DeclarationNode(const std::string& t, const std::string& n, ASTNodePtr init, int line, int col)
-        : ASTNode(ASTNodeType::DECLARATION, line, col), 
-          type(t), name(n), initializer(std::move(init)) {}
+    DeclarationNode(const std::string& t, int line, int col)
+        : ASTNode(ASTNodeType::DECLARATION, line, col), type(t) {}
 };
 
 class ProgramNode : public ASTNode {
 public:
-    std::vector<ASTNodePtr> declarations;
-    std::vector<ASTNodePtr> statements;
+    std::vector<ASTNodePtr> children;
 
     ProgramNode() : ASTNode(ASTNodeType::PROGRAM, 0, 0) {}
     
-    void addDeclaration(ASTNodePtr decl) {
-        declarations.push_back(std::move(decl));
-    }
-    
-    void addStatement(ASTNodePtr stmt) {
-        statements.push_back(std::move(stmt));
+    void addChild(ASTNodePtr child) {
+        children.push_back(std::move(child));
     }
 };
