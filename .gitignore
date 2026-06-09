@@ -1,0 +1,5 @@
+build/
+*.exe
+*.o
+output_*.s
+test_output.txt
