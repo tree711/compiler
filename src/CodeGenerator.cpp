@@ -205,13 +205,13 @@ void CodeGenerator::generateBasicBlock(BasicBlock& block) {
                 std::string left = instr->operands[0];
                 std::string right = instr->operands[1];
                 
-                output << "\tmovl $0, %edx\n";
                 if (variableOffsets.find(left) != variableOffsets.end()) {
                     int offset = variableOffsets[left];
                     output << "\tmovl " << offset << "(%rbp), %eax\n";
                 } else {
                     output << "\tmovl " << asmOperand(left) << ", %eax\n";
                 }
+                output << "\tcltd\n";
                 
                 if (variableOffsets.find(right) != variableOffsets.end()) {
                     int offset = variableOffsets[right];

@@ -47,7 +47,12 @@ void Optimizer::constantFolding(FunctionIR& func) {
                             case IROpcode::ADD: result = values[0] + values[1]; break;
                             case IROpcode::SUB: result = values[0] - values[1]; break;
                             case IROpcode::MUL: result = values[0] * values[1]; break;
-                            case IROpcode::DIV: result = values[0] / values[1]; break;
+                            case IROpcode::DIV:
+                                if (values[1] == 0) {
+                                    throw std::runtime_error("Division by zero during optimization");
+                                }
+                                result = values[0] / values[1];
+                                break;
                             default: continue;
                         }
                     } else {

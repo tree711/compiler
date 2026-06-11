@@ -121,7 +121,6 @@ void IRGenerator::generateStatement(ASTNode* node) {
             
             BasicBlock* thenBlock = currentFunction->createBlock(newLabel("then"));
             BasicBlock* elseBlock = currentFunction->createBlock(newLabel("else"));
-            BasicBlock* mergeBlock = currentFunction->createBlock(newLabel("merge"));
 
             // if cond == 1 (true), jump to thenBlock; else fall through to elseBlock
             currentBlock->addInstruction(std::make_unique<IRInstruction>(
@@ -131,14 +130,20 @@ void IRGenerator::generateStatement(ASTNode* node) {
 
             currentBlock = thenBlock;
             generateStatement(ifStmt->thenBranch.get());
-            currentBlock->addInstruction(std::make_unique<IRInstruction>(
-                IROpcode::BRANCH, "", std::vector<std::string>{mergeBlock->name}));
+            BasicBlock* thenEnd = currentBlock;
 
             currentBlock = elseBlock;
             if (ifStmt->elseBranch) {
                 generateStatement(ifStmt->elseBranch.get());
             }
-            currentBlock->addInstruction(std::make_unique<IRInstruction>(
+            BasicBlock* elseEnd = currentBlock;
+
+            // Create the merge block after nested blocks so linear code emission
+            // cannot fall from an outer merge back into an inner branch.
+            BasicBlock* mergeBlock = currentFunction->createBlock(newLabel("merge"));
+            thenEnd->addInstruction(std::make_unique<IRInstruction>(
+                IROpcode::BRANCH, "", std::vector<std::string>{mergeBlock->name}));
+            elseEnd->addInstruction(std::make_unique<IRInstruction>(
                 IROpcode::BRANCH, "", std::vector<std::string>{mergeBlock->name}));
 
             currentBlock = mergeBlock;
@@ -148,24 +153,26 @@ void IRGenerator::generateStatement(ASTNode* node) {
             auto whileStmt = dynamic_cast<WhileStatementNode*>(node);
             BasicBlock* condBlock = currentFunction->createBlock(newLabel("while_cond"));
             BasicBlock* bodyBlock = currentFunction->createBlock(newLabel("while_body"));
-            BasicBlock* exitBlock = currentFunction->createBlock(newLabel("while_exit"));
 
             currentBlock->addInstruction(std::make_unique<IRInstruction>(
                 IROpcode::BRANCH, "", std::vector<std::string>{condBlock->name}));
 
             currentBlock = condBlock;
             std::string cond = generateExpression(whileStmt->condition.get());
+            std::string exitLabel = newLabel("while_exit");
             // if cond == 1 (true), jump to body; else fall through to exit
             currentBlock->addInstruction(std::make_unique<IRInstruction>(
                 IROpcode::BRANCH_EQ, "", std::vector<std::string>{cond, "1", bodyBlock->name}));
             currentBlock->addInstruction(std::make_unique<IRInstruction>(
-                IROpcode::BRANCH, "", std::vector<std::string>{exitBlock->name}));
+                IROpcode::BRANCH, "", std::vector<std::string>{exitLabel}));
 
             currentBlock = bodyBlock;
             generateStatement(whileStmt->body.get());
-            currentBlock->addInstruction(std::make_unique<IRInstruction>(
+            BasicBlock* bodyEnd = currentBlock;
+            bodyEnd->addInstruction(std::make_unique<IRInstruction>(
                 IROpcode::BRANCH, "", std::vector<std::string>{condBlock->name}));
 
+            BasicBlock* exitBlock = currentFunction->createBlock(exitLabel);
             currentBlock = exitBlock;
             break;
         }

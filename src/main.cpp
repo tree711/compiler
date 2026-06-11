@@ -22,6 +22,11 @@
 #include <memory>
 #include <cstring>
 
+#ifdef _WIN32
+extern "C" __declspec(dllimport) int __stdcall SetConsoleOutputCP(unsigned int);
+extern "C" __declspec(dllimport) int __stdcall SetConsoleCP(unsigned int);
+#endif
+
 // Parser 类声明（实现在 Parser.cpp）
 class Parser {
 private:
@@ -385,6 +390,12 @@ int compile(const CompilerOptions& options) {
 
 // ========== 主函数 ==========
 int main(int argc, char* argv[]) {
+#ifdef _WIN32
+    constexpr unsigned int UTF8_CODE_PAGE = 65001;
+    SetConsoleOutputCP(UTF8_CODE_PAGE);
+    SetConsoleCP(UTF8_CODE_PAGE);
+#endif
+
     // 解析命令行参数
     CompilerOptions options;
     

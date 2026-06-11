@@ -21,6 +21,11 @@ public:
 };
 
 void SemanticAnalyzer::visitProgramNode(ProgramNode* node) {
+    if (!node) return;
+
+    for (auto& child : node->children) {
+        visitStatementNode(child.get());
+    }
     for (auto& decl : node->declarations) {
         visitDeclarationNode(dynamic_cast<DeclarationNode*>(decl.get()));
     }
@@ -30,18 +35,31 @@ void SemanticAnalyzer::visitProgramNode(ProgramNode* node) {
 }
 
 void SemanticAnalyzer::visitDeclarationNode(DeclarationNode* node) {
+    if (!node) return;
+
     SymbolType type;
     if (node->type == "int") type = SymbolType::INTEGER;
     else if (node->type == "float") type = SymbolType::FLOAT;
     else if (node->type == "void") type = SymbolType::VOID;
     else throw std::runtime_error("Unknown type: " + node->type);
 
-    if (symbolTable.existsInCurrentScope(node->name)) {
-        throw std::runtime_error("Variable " + node->name + " already declared in this scope");
+    if (!node->variables.empty()) {
+        for (auto& variable : node->variables) {
+            if (symbolTable.existsInCurrentScope(variable->name)) {
+                throw std::runtime_error(
+                    "Variable " + variable->name + " already declared in this scope");
+            }
+            symbolTable.insert(new Symbol(
+                variable->name, type, symbolTable.getCurrentScope(), variable->line));
+        }
+    } else if (!node->name.empty()) {
+        if (symbolTable.existsInCurrentScope(node->name)) {
+            throw std::runtime_error(
+                "Variable " + node->name + " already declared in this scope");
+        }
+        symbolTable.insert(
+            new Symbol(node->name, type, symbolTable.getCurrentScope(), node->line));
     }
-
-    Symbol* symbol = new Symbol(node->name, type, symbolTable.getCurrentScope(), node->line);
-    symbolTable.insert(symbol);
 
     if (node->initializer) {
         SymbolType exprType = visitExpressionAndGetType(node->initializer.get());
@@ -129,11 +147,21 @@ void SemanticAnalyzer::visitStatementNode(ASTNode* node) {
         }
         case ASTNodeType::ASSIGNMENT: {
             auto assign = dynamic_cast<AssignmentNode*>(node);
-            Symbol* symbol = symbolTable.lookup(assign->name);
-            if (!symbol) {
-                throw std::runtime_error("Undefined variable: " + assign->name);
+            std::string variableName = assign->name;
+            ASTNode* value = assign->value.get();
+            if (variableName.empty() && assign->left) {
+                auto identifier = dynamic_cast<IdentifierNode*>(assign->left.get());
+                if (identifier) {
+                    variableName = identifier->name;
+                }
+                value = assign->right.get();
             }
-            visitExpressionNode(assign->value.get());
+
+            Symbol* symbol = symbolTable.lookup(variableName);
+            if (!symbol) {
+                throw std::runtime_error("Undefined variable: " + variableName);
+            }
+            visitExpressionAndGetType(value);
             break;
         }
         case ASTNodeType::DECLARATION: {
@@ -151,6 +179,14 @@ void SemanticAnalyzer::visitExpressionNode(ASTNode* node) {
     switch (node->type) {
         case ASTNodeType::BINARY_OP: {
             auto binOp = dynamic_cast<BinaryOpNode*>(node);
+            if (binOp->op == "/") {
+                auto divisor = dynamic_cast<NumberNode*>(binOp->right.get());
+                if (divisor &&
+                    ((!divisor->isFloat && std::get<int>(divisor->value) == 0) ||
+                     (divisor->isFloat && std::get<double>(divisor->value) == 0.0))) {
+                    throw std::runtime_error("Division by zero");
+                }
+            }
             visitExpressionNode(binOp->left.get());
             visitExpressionNode(binOp->right.get());
             break;
@@ -193,6 +229,14 @@ SymbolType SemanticAnalyzer::visitExpressionAndGetType(ASTNode* node) {
         }
         case ASTNodeType::BINARY_OP: {
             auto binOp = dynamic_cast<BinaryOpNode*>(node);
+            if (binOp->op == "/") {
+                auto divisor = dynamic_cast<NumberNode*>(binOp->right.get());
+                if (divisor &&
+                    ((!divisor->isFloat && std::get<int>(divisor->value) == 0) ||
+                     (divisor->isFloat && std::get<double>(divisor->value) == 0.0))) {
+                    throw std::runtime_error("Division by zero");
+                }
+            }
             SymbolType leftType = visitExpressionAndGetType(binOp->left.get());
             SymbolType rightType = visitExpressionAndGetType(binOp->right.get());
             if (leftType != rightType) {
