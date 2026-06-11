@@ -11,7 +11,7 @@ enum class IROpcode {
     BRANCH, BRANCH_EQ, BRANCH_NE, BRANCH_LT, BRANCH_GT, BRANCH_LE, BRANCH_GE,
     CALL, RET,
     PHI,
-    // Comparison (produce 0 or 1)
+    // 比较指令（结果为 0 或 1）
     CMP_EQ, CMP_NE, CMP_LT, CMP_GT, CMP_LE, CMP_GE
 };
 

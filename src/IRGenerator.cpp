@@ -122,7 +122,7 @@ void IRGenerator::generateStatement(ASTNode* node) {
             BasicBlock* thenBlock = currentFunction->createBlock(newLabel("then"));
             BasicBlock* elseBlock = currentFunction->createBlock(newLabel("else"));
 
-            // if cond == 1 (true), jump to thenBlock; else fall through to elseBlock
+            // 条件值为 1 时跳转到真分支，否则跳转到假分支
             currentBlock->addInstruction(std::make_unique<IRInstruction>(
                 IROpcode::BRANCH_EQ, "", std::vector<std::string>{cond, "1", thenBlock->name}));
             currentBlock->addInstruction(std::make_unique<IRInstruction>(
@@ -138,8 +138,8 @@ void IRGenerator::generateStatement(ASTNode* node) {
             }
             BasicBlock* elseEnd = currentBlock;
 
-            // Create the merge block after nested blocks so linear code emission
-            // cannot fall from an outer merge back into an inner branch.
+            // 在嵌套分支生成完成后再创建汇合块，
+            // 避免线性输出汇编时从外层汇合块错误落入内层分支
             BasicBlock* mergeBlock = currentFunction->createBlock(newLabel("merge"));
             thenEnd->addInstruction(std::make_unique<IRInstruction>(
                 IROpcode::BRANCH, "", std::vector<std::string>{mergeBlock->name}));
@@ -160,7 +160,7 @@ void IRGenerator::generateStatement(ASTNode* node) {
             currentBlock = condBlock;
             std::string cond = generateExpression(whileStmt->condition.get());
             std::string exitLabel = newLabel("while_exit");
-            // if cond == 1 (true), jump to body; else fall through to exit
+            // 条件值为 1 时进入循环体，否则跳转到循环出口
             currentBlock->addInstruction(std::make_unique<IRInstruction>(
                 IROpcode::BRANCH_EQ, "", std::vector<std::string>{cond, "1", bodyBlock->name}));
             currentBlock->addInstruction(std::make_unique<IRInstruction>(
