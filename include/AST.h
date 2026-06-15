@@ -162,7 +162,7 @@ class FunctionDefinitionNode : public ASTNode {
 public:
     std::string name;
     std::string returnType;
-    std::vector<std::pair<std::string, std::string>> parameters; // (name, type)
+    std::vector<std::pair<std::string, std::string>> parameters; // 参数名称与类型
     ASTNodePtr body;
 
     FunctionDefinitionNode(const std::string& n, const std::string& rt,

@@ -22,6 +22,11 @@
 #include <memory>
 #include <cstring>
 
+#ifdef _WIN32
+extern "C" __declspec(dllimport) int __stdcall SetConsoleOutputCP(unsigned int);
+extern "C" __declspec(dllimport) int __stdcall SetConsoleCP(unsigned int);
+#endif
+
 // Parser 类声明（实现在 Parser.cpp）
 class Parser {
 private:
@@ -288,7 +293,7 @@ void printIR(IRProgram& program) {
 // ========== 主编译函数 ==========
 int compile(const CompilerOptions& options) {
     try {
-        // ========== Step 1: 词法分析 ==========
+        // ========== 第一步：词法分析 ==========
         if (options.verbose) printSeparator("Step 1: Lexer (词法分析)");
         
         Lexer lexer(options.inputFile);
@@ -299,7 +304,7 @@ int compile(const CompilerOptions& options) {
             std::cout << "✅ 词法分析完成\n";
         }
         
-        // ========== Step 2: 语法分析 ==========
+        // ========== 第二步：语法分析 ==========
         if (options.verbose) printSeparator("Step 2: Parser (语法分析)");
         
         Lexer lexer2(options.inputFile);
@@ -312,7 +317,7 @@ int compile(const CompilerOptions& options) {
             std::cout << "\n✅ 语法分析完成\n";
         }
         
-        // ========== Step 3: 语义分析 ==========
+        // ========== 第三步：语义分析 ==========
         if (options.verbose) printSeparator("Step 3: Semantic (语义分析)");
         
         SemanticAnalyzer semantic;
@@ -323,7 +328,7 @@ int compile(const CompilerOptions& options) {
             std::cout << "✅ 语义分析完成\n";
         }
         
-        // ========== Step 4: 中间代码生成 ==========
+        // ========== 第四步：中间代码生成 ==========
         if (options.verbose) printSeparator("Step 4: IR Generation (中间代码生成)");
         
         IRGenerator irGen;
@@ -334,7 +339,7 @@ int compile(const CompilerOptions& options) {
             std::cout << "\n✅ 中间代码生成完成\n";
         }
         
-        // ========== Step 5: 优化 ==========
+        // ========== 第五步：代码优化 ==========
         if (options.optimize) {
             if (options.verbose) printSeparator("Step 5: Optimization (代码优化)");
             
@@ -348,7 +353,7 @@ int compile(const CompilerOptions& options) {
             }
         }
         
-        // ========== Step 6: 代码生成 ==========
+        // ========== 第六步：代码生成 ==========
         if (options.verbose) printSeparator("Step 6: Code Generation (代码生成)");
         
         CodeGenerator codeGen(options.outputFile);
@@ -385,6 +390,12 @@ int compile(const CompilerOptions& options) {
 
 // ========== 主函数 ==========
 int main(int argc, char* argv[]) {
+#ifdef _WIN32
+    constexpr unsigned int UTF8_CODE_PAGE = 65001;
+    SetConsoleOutputCP(UTF8_CODE_PAGE);
+    SetConsoleCP(UTF8_CODE_PAGE);
+#endif
+
     // 解析命令行参数
     CompilerOptions options;
     

@@ -205,13 +205,13 @@ void CodeGenerator::generateBasicBlock(BasicBlock& block) {
                 std::string left = instr->operands[0];
                 std::string right = instr->operands[1];
                 
-                output << "\tmovl $0, %edx\n";
                 if (variableOffsets.find(left) != variableOffsets.end()) {
                     int offset = variableOffsets[left];
                     output << "\tmovl " << offset << "(%rbp), %eax\n";
                 } else {
                     output << "\tmovl " << asmOperand(left) << ", %eax\n";
                 }
+                output << "\tcltd\n";
                 
                 if (variableOffsets.find(right) != variableOffsets.end()) {
                     int offset = variableOffsets[right];
@@ -223,7 +223,7 @@ void CodeGenerator::generateBasicBlock(BasicBlock& block) {
                 storeTemp(output, variableOffsets, result);
                 break;
             }
-            // ---- Comparison instructions (produce 0 or 1) ----
+            // ---- 比较指令（结果为 0 或 1）----
             case IROpcode::CMP_EQ:
             case IROpcode::CMP_NE:
             case IROpcode::CMP_LT:
@@ -234,19 +234,19 @@ void CodeGenerator::generateBasicBlock(BasicBlock& block) {
                 std::string left = instr->operands[0];
                 std::string right = instr->operands[1];
 
-                // Load left operand
+                // 加载左操作数
                 if (variableOffsets.find(left) != variableOffsets.end()) {
                     output << "\tmovl " << variableOffsets[left] << "(%rbp), %eax\n";
                 } else {
                     output << "\tmovl " << asmOperand(left) << ", %eax\n";
                 }
-                // Compare with right operand
+                // 与右操作数比较
                 if (variableOffsets.find(right) != variableOffsets.end()) {
                     output << "\tcmpl " << variableOffsets[right] << "(%rbp), %eax\n";
                 } else {
                     output << "\tcmpl " << asmOperand(right) << ", %eax\n";
                 }
-                // Set condition flag byte
+                // 根据比较结果设置条件标志字节
                 const char* setcc = "";
                 switch (instr->opcode) {
                     case IROpcode::CMP_EQ: setcc = "sete";  break;
@@ -264,7 +264,7 @@ void CodeGenerator::generateBasicBlock(BasicBlock& block) {
                 break;
             }
 
-            // ---- Branch instructions ----
+            // ---- 分支跳转指令 ----
             case IROpcode::BRANCH: {
                 std::string target = instr->operands[0];
                 output << "\tjmp " << target << "\n";
@@ -280,7 +280,7 @@ void CodeGenerator::generateBasicBlock(BasicBlock& block) {
                 std::string value = instr->operands[1];
                 std::string target = instr->operands[2];
 
-                // Load condition value
+                // 加载条件值
                 if (variableOffsets.find(cond) != variableOffsets.end()) {
                     int offset = variableOffsets[cond];
                     output << "\tmovl " << offset << "(%rbp), %eax\n";

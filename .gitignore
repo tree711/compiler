@@ -1,5 +1,7 @@
 build/
 *.exe
 *.o
-output_*.s
+*.s
 test_output.txt
+*_debug.txt
+verbose_*.txt
